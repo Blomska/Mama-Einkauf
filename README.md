@@ -120,6 +120,8 @@ Der GitHub-Workflow startet `scripts/update-prospekte.mjs`. Das Skript liest die
 | `aldi-nord.de/prospekte/aldi-aktuell.html` & `…/aldi-vorschau.html` | Prospektseiten als Bilder (diese und nächste Woche) und PDF-Link |
 | `aldi-nord.de/angebote.html` | Alle Aldi-Angebote mit Name, Marke, Preis, Gültigkeit und Bild |
 | `edeka-nientied.de/angebote-marktkauf-nientied-luedinghausen/` | Marktkauf: Gültigkeit, Titelbild und Link zum Blätterkatalog |
+| `blaetterkatalog.edeka.de/RHEINRUHR/MARKTKAUF_1844/…` | Offizieller EDEKA-Prospekt von Marktkauf Nientied: Alle Seiten werden heruntergeladen und über GitHub Pages ausgeliefert (`data/mk-seiten/`, nicht im Repository) |
+| `edeka.de/eh/service/eh/offers?marketId=10008010` | Marktkauf-Angebote als Liste. Wird nur genutzt, wenn EDEKA den automatischen Abruf zulässt, sonst übersprungen |
 
 - Fällt eine Quelle aus, bleiben die zuletzt gespeicherten Daten erhalten.
 - Ändern die Shops ihre Webseiten, muss eventuell das Skript angepasst werden. Die App funktioniert in diesem Fall trotzdem weiter, nur ohne neue Prospekte.
