@@ -13,12 +13,12 @@
  */
 
 export const firebaseConfig = {
-  apiKey: 'DEIN_API_KEY',
-  authDomain: 'DEIN_PROJEKT.firebaseapp.com',
-  projectId: 'DEIN_PROJEKT',
-  storageBucket: 'DEIN_PROJEKT.appspot.com',
-  messagingSenderId: '000000000000',
-  appId: 'DEINE_APP_ID'
+  apiKey: 'AIzaSyCOktct2FveuqmMe1BnZHxhX6TpgGKv02w',
+  authDomain: 'mamas-einkaufsliste.firebaseapp.com',
+  projectId: 'mamas-einkaufsliste',
+  storageBucket: 'mamas-einkaufsliste.firebasestorage.app',
+  messagingSenderId: '953509252897',
+  appId: '1:953509252897:web:d07f87a8248d1c7308f860'
 };
 
 /**
