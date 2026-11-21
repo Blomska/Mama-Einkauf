@@ -32,7 +32,10 @@ const SOURCES = {
   aldiOffers: 'https://www.aldi-nord.de/angebote.html',
   marktkauf: 'https://edeka-nientied.de/angebote-marktkauf-nientied-luedinghausen/',
   // Offizielle EDEKA-Quellen für Marktkauf Nientied (EDEKA Markt-ID 10008010, Marktnr. 071844)
-  edekaOffers: 'https://www.edeka.de/eh/service/eh/offers?marketId=10008010&limit=999',
+  edekaOffers: [
+    'https://www.edeka.de/eh/service/eh/offers?marketId=10008010',
+    'https://www.edeka.de/eh/service/eh/offers?marketId=10008010&limit=999'
+  ],
   edekaMarket: 'https://www.edeka.de/maerkte/071844/',
   edekaFlyerFallback: 'https://blaetterkatalog.edeka.de/RHEINRUHR/MARKTKAUF_1844/blaetterkatalog/'
 };
@@ -275,7 +278,16 @@ function groupRank(name) {
 }
 
 async function loadMarktkaufOffers() {
-  const json = JSON.parse(await fetchText(SOURCES.edekaOffers));
+  let json = null;
+  for (const url of SOURCES.edekaOffers) {
+    try {
+      json = JSON.parse(await fetchText(url));
+      if (Array.isArray(json?.docs) && json.docs.length) break;
+    } catch (err) {
+      console.warn(`  ${err.message}`);
+    }
+  }
+  if (!json) throw new Error('EDEKA-Angebote nicht erreichbar');
   const docs = Array.isArray(json.docs) ? json.docs : [];
   console.log(`  EDEKA-Antwort: ${docs.length} Angebote, Felder oben: ${Object.keys(json).join(', ')}`);
   if (!docs.length) throw new Error('Keine EDEKA-Angebote');
