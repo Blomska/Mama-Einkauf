@@ -19,7 +19,7 @@
  * ------------------------------------------------------------------
  */
 
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -30,8 +30,15 @@ const SOURCES = {
   aldiCurrent: 'https://www.aldi-nord.de/prospekte/aldi-aktuell.html',
   aldiNext: 'https://www.aldi-nord.de/prospekte/aldi-vorschau.html',
   aldiOffers: 'https://www.aldi-nord.de/angebote.html',
-  marktkauf: 'https://edeka-nientied.de/angebote-marktkauf-nientied-luedinghausen/'
+  marktkauf: 'https://edeka-nientied.de/angebote-marktkauf-nientied-luedinghausen/',
+  // Offizielle EDEKA-Quellen für Marktkauf Nientied (EDEKA Markt-ID 10008010, Marktnr. 071844)
+  edekaOffers: 'https://www.edeka.de/eh/service/eh/offers?marketId=10008010&limit=999',
+  edekaMarket: 'https://www.edeka.de/maerkte/071844/',
+  edekaFlyerFallback: 'https://blaetterkatalog.edeka.de/RHEINRUHR/MARKTKAUF_1844/blaetterkatalog/'
 };
+
+const MK_PAGES_DIR = 'data/mk-seiten';
+const MAX_PAGES = 120;
 
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36',
@@ -250,6 +257,106 @@ async function loadMarktkauf() {
   return { current, next, pageUrl: SOURCES.marktkauf };
 }
 
+/* ---------------- Marktkauf: EDEKA-Angebote ---------------- */
+
+function isoFromMs(ms) {
+  if (!ms) return null;
+  // +12 h, damit Mitternacht-UTC-Zeitstempel sicher auf dem richtigen Tag landen
+  return new Date(Number(ms) + 12 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+const MK_GROUP_ORDER = ['Obst', 'Gemüse', 'Frische', 'Brot', 'Back', 'Fleisch', 'Wurst', 'Fisch', 'Käse', 'Molkerei',
+  'Kühl', 'Tiefkühl', 'Grundnahrung', 'Feinkost', 'Süß', 'Snack', 'Kaffee', 'Getränke', 'Wein', 'Spirituosen',
+  'Drogerie', 'Haushalt', 'Tier', 'Non-Food'];
+
+function groupRank(name) {
+  const i = MK_GROUP_ORDER.findIndex((g) => String(name).toLowerCase().includes(g.toLowerCase()));
+  return i === -1 ? 99 : i;
+}
+
+async function loadMarktkaufOffers() {
+  const json = JSON.parse(await fetchText(SOURCES.edekaOffers));
+  const docs = Array.isArray(json.docs) ? json.docs : [];
+  console.log(`  EDEKA-Antwort: ${docs.length} Angebote, Felder oben: ${Object.keys(json).join(', ')}`);
+  if (!docs.length) throw new Error('Keine EDEKA-Angebote');
+
+  const offers = docs
+    .filter((d) => d && d.titel)
+    .map((d) => ({
+      id: String(d.angebotid ?? d.titel),
+      name: String(d.titel).trim(),
+      brand: '',
+      price: formatEuro(Number(d.preis)),
+      unit: String(d.beschreibung || '').replace(/\s+/g, ' ').trim().slice(0, 90),
+      basePrice: String(d.basicPrice || '').replace(/€\s*([\d.]+)/, (m, v) => formatEuro(Number(v))).trim(),
+      validFrom: isoFromMs(d.gueltig_von ?? d.gueltig_ab) || null,
+      validTo: isoFromMs(d.gueltig_bis),
+      group: String(d.warengruppe || 'Weitere Angebote').trim(),
+      image: d.bild_app || d.bild_web130 || d.bild_web90 || null
+    }));
+
+  const groups = [...new Set(offers.map((o) => o.group))].sort((a, b) => groupRank(a) - groupRank(b) || a.localeCompare(b, 'de'));
+  offers.sort((a, b) => groups.indexOf(a.group) - groups.indexOf(b.group) || a.name.localeCompare(b.name, 'de'));
+  return { groups, offers, sourceUrl: 'https://www.edeka.de/markt-id/10008010/prospekt.jsp' };
+}
+
+/* ---------------- Marktkauf: offizieller EDEKA-Blätterkatalog ---------------- */
+
+async function fetchBinary(url) {
+  const res = await fetch(url, { headers: HEADERS, redirect: 'follow' });
+  if (!res.ok) return null;
+  const type = res.headers.get('content-type') || '';
+  if (!type.startsWith('image/') && !type.includes('pdf') && !type.includes('octet-stream')) return null;
+  return Buffer.from(await res.arrayBuffer());
+}
+
+/**
+ * Lädt alle Seiten des Marktkauf-Prospekts (bk_1.jpg, bk_2.jpg, …) und legt
+ * sie in data/mk-seiten/ ab – sie werden dann von GitHub Pages ausgeliefert.
+ */
+async function loadMarktkaufPages() {
+  let base = SOURCES.edekaFlyerFallback;
+  try {
+    const html = await fetchText(SOURCES.edekaMarket);
+    const found = html.match(/https:\/\/blaetterkatalog\.edeka\.de\/[^"'\s<>]+?\/blaetterkatalog\//i);
+    if (found) base = found[0];
+  } catch (err) {
+    console.warn(`  Marktseite nicht lesbar (${err.message}) – nutze bekannte Adresse`);
+  }
+  console.log(`  Blätterkatalog: ${base}`);
+
+  // Größte verfügbare Bildvariante wählen
+  let variant = null;
+  let first = null;
+  for (const v of ['large', 'normal']) {
+    first = await fetchBinary(`${base}${v}/bk_1.jpg`);
+    if (first) { variant = v; break; }
+  }
+  if (!first) throw new Error('Keine Prospektseiten gefunden');
+
+  const dir = resolve(ROOT, MK_PAGES_DIR);
+  await rm(dir, { recursive: true, force: true });
+  await mkdir(dir, { recursive: true });
+
+  const pages = [];
+  let buf = first;
+  for (let n = 1; n <= MAX_PAGES && buf; n++) {
+    const file = `${MK_PAGES_DIR}/seite-${n}.jpg`;
+    await writeFile(resolve(ROOT, file), buf);
+    pages.push(file);
+    buf = await fetchBinary(`${base}${variant}/bk_${n + 1}.jpg`);
+  }
+  console.log(`  ${pages.length} Seiten (${variant}) gespeichert`);
+
+  let pdfUrl = null;
+  try {
+    const head = await fetch(`${base}pdf/complete.pdf`, { method: 'HEAD', headers: HEADERS });
+    if (head.ok) pdfUrl = `${base}pdf/complete.pdf`;
+  } catch { /* kein PDF */ }
+
+  return { pages, pdfUrl, viewerUrl: `${base}index.html` };
+}
+
 /* ---------------- Hauptprogramm ---------------- */
 
 async function settle(label, fn) {
@@ -269,12 +376,34 @@ async function main() {
     previous = JSON.parse(await readFile(OUT_FILE, 'utf8'));
   } catch { /* erste Ausführung */ }
 
-  const [aldiCurrent, aldiNext, aldiOffers, marktkauf] = await Promise.all([
+  const [aldiCurrent, aldiNext, aldiOffers, marktkauf, mkOffers, mkPages] = await Promise.all([
     settle('Aldi Prospekt (diese Woche)', () => loadAldiFlyer(SOURCES.aldiCurrent)),
     settle('Aldi Prospekt (nächste Woche)', () => loadAldiFlyer(SOURCES.aldiNext)),
     settle('Aldi Angebote', loadAldiOffers),
-    settle('Marktkauf Prospekt', loadMarktkauf)
+    settle('Marktkauf Prospekt (Nientied-Seite)', loadMarktkauf),
+    settle('Marktkauf Angebote (EDEKA)', loadMarktkaufOffers),
+    settle('Marktkauf Prospektseiten (EDEKA)', loadMarktkaufPages)
   ]);
+
+  // Marktkauf zusammenführen: Daten der Nientied-Seite + EDEKA-Prospektseiten + EDEKA-Angebote
+  const mk = marktkauf ?? previous.marktkauf ?? { current: null, next: null, pageUrl: SOURCES.marktkauf };
+  if (mkPages?.pages?.length) {
+    const validTo = mkOffers?.offers?.map((o) => o.validTo).filter(Boolean).sort().pop() || null;
+    mk.current = {
+      title: 'Marktkauf Nientied',
+      validFrom: mk.current?.validFrom ?? (validTo ? addDays(validTo, -5) : null),
+      validTo: mk.current?.validTo ?? validTo,
+      ...mk.current,
+      viewerUrl: mkPages.viewerUrl,
+      pdfUrl: mkPages.pdfUrl,
+      cover: mkPages.pages[0],
+      pages: mkPages.pages
+    };
+  } else if (mk.current?.pages?.length && !mkPages) {
+    // Seiten konnten nicht neu geladen werden und liegen nicht im Repository → nicht verlinken
+    mk.current.pages = [];
+  }
+  mk.offers = mkOffers ?? null;
 
   const result = {
     updatedAt: new Date().toISOString(),
@@ -284,7 +413,7 @@ async function main() {
       next: aldiNext ?? previous.aldi?.next ?? null,
       offers: aldiOffers ?? previous.aldi?.offers ?? null
     },
-    marktkauf: marktkauf ?? previous.marktkauf ?? { current: null, next: null, pageUrl: SOURCES.marktkauf }
+    marktkauf: mk
   };
 
   // Vorschau = gleiche Woche wie aktuell? Dann weglassen.
@@ -295,7 +424,8 @@ async function main() {
   await mkdir(dirname(OUT_FILE), { recursive: true });
   await writeFile(OUT_FILE, `${JSON.stringify(result, null, 1)}\n`);
   const count = result.aldi.offers?.offers?.length ?? 0;
-  console.log(`→ ${OUT_FILE} geschrieben (${count} Aldi-Angebote)`);
+  const mkCount = result.marktkauf.offers?.offers?.length ?? 0;
+  console.log(`→ ${OUT_FILE} geschrieben (${count} Aldi-Angebote, ${mkCount} Marktkauf-Angebote, ${result.marktkauf.current?.pages?.length ?? 0} Marktkauf-Seiten)`);
 
   if (!aldiCurrent && !aldiOffers && !marktkauf) {
     console.error('Alle Quellen fehlgeschlagen – alte Daten beibehalten.');

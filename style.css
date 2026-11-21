@@ -602,6 +602,7 @@ main { padding: 0 16px; }
   font-size: 24px; font-weight: 800;
 }
 .ocard.is-on-list .ocard__add { background: var(--done); }
+.viewer--marktkauf .ocard__price { background: var(--mk-blue); color: var(--mk-yellow); }
 
 /* ---------- Filter-Tabs ---------- */
 .tabs {

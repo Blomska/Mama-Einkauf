@@ -448,30 +448,42 @@ function formatRange(from, to) {
 
 const autoOfferCache = new Map();
 
-/** Aktuell gültige Aldi-Angebote (inkl. solcher, die diese Woche noch starten). */
-function aldiOffers() {
-  const offers = state.prospekte?.aldi?.offers?.offers || [];
+/** Aktuell gültige Angebote eines Ladens (inkl. solcher, die diese Woche noch starten). */
+function storeOffers(store) {
+  const offers = state.prospekte?.[store]?.offers?.offers || [];
   const today = todayIso();
   return offers.filter((o) => !o.validTo || o.validTo >= today);
 }
 
-/** Passendes Aldi-Angebot für einen Artikelnamen (oder null). */
+function priceValue(price) {
+  const n = parseFloat(String(price || '').replace(/[^\d,]/g, '').replace(',', '.'));
+  return Number.isFinite(n) ? n : Infinity;
+}
+
+/**
+ * Passendes Angebot (Aldi oder Marktkauf) für einen Artikelnamen.
+ * Bester Treffer gewinnt; bei gleich gutem Treffer der günstigere Preis.
+ */
 function autoOffer(name) {
   const key = normalize(name);
   if (autoOfferCache.has(key)) return autoOfferCache.get(key);
   let best = null;
   let bestScore = 0;
-  for (const o of aldiOffers()) {
-    const score = offerMatchScore(name, o.name);
-    if (score > bestScore) {
-      best = o;
-      bestScore = score;
-      if (score === 2) break;
+  let bestStore = null;
+  for (const store of ['aldi', 'marktkauf']) {
+    for (const o of storeOffers(store)) {
+      const score = offerMatchScore(name, o.name);
+      if (!score) continue;
+      if (score > bestScore || (score === bestScore && priceValue(o.price) < priceValue(best.price))) {
+        best = o;
+        bestScore = score;
+        bestStore = store;
+      }
     }
   }
   const result = best ? {
     auto: true,
-    store: 'aldi',
+    store: bestStore,
     price: best.price,
     name: best.name,
     product: [best.brand, best.name].filter(Boolean).join(' '),
@@ -1148,7 +1160,7 @@ const viewer = { store: 'aldi', week: 'current', tab: 'angebote', query: '' };
 function openProspekt(store, tab) {
   viewer.store = store;
   viewer.week = 'current';
-  viewer.tab = tab || (store === 'aldi' && state.prospekte?.aldi?.offers ? 'angebote' : 'prospekt');
+  viewer.tab = tab || (storeOffers(store).length ? 'angebote' : 'prospekt');
   viewer.query = '';
   renderViewer();
   if (typeof els.viewer.showModal === 'function') els.viewer.showModal();
@@ -1165,7 +1177,7 @@ function renderViewer() {
   const current = flyerFor(store, 'current');
   const next = flyerFor(store, 'next');
   if (viewer.week === 'next' && !next) viewer.week = 'current';
-  const hasOffers = store === 'aldi' && aldiOffers().length > 0;
+  const hasOffers = storeOffers(store).length > 0;
   if (viewer.tab === 'angebote' && (!hasOffers || viewer.week === 'next')) viewer.tab = 'prospekt';
 
   els.viewer.className = `viewer viewer--${store}`;
@@ -1186,7 +1198,7 @@ function renderViewer() {
     const active = btn.dataset.tab === viewer.tab;
     btn.classList.toggle('is-active', active);
     btn.setAttribute('aria-selected', String(active));
-    if (btn.dataset.tab === 'angebote') btn.innerHTML = `🛒 Angebote <small>${aldiOffers().length}</small>`;
+    if (btn.dataset.tab === 'angebote') btn.innerHTML = `🛒 Angebote <small>${storeOffers(store).length}</small>`;
   });
 
   if (viewer.tab === 'angebote') renderOfferBrowser();
@@ -1218,7 +1230,7 @@ function renderFlyer(flyer) {
   }
 
   const actions = [];
-  if (isMk) {
+  if (isMk && !flyer.pages?.length) {
     actions.push(`<a class="btn btn--primary btn--block" href="${escapeHtml(pageUrl)}" target="_blank" rel="noopener noreferrer">📰 Prospekt durchblättern ↗</a>`);
   } else if (flyer.viewerUrl && !flyer.pages?.length) {
     actions.push(`<a class="btn btn--primary btn--block" href="${escapeHtml(flyer.viewerUrl)}" target="_blank" rel="noopener noreferrer">📰 Prospekt durchblättern ↗</a>`);
@@ -1243,8 +1255,8 @@ function renderFlyer(flyer) {
     ${content}
     ${flyer.pages?.length ? '<p class="viewer__note">Tipp: Mit zwei Fingern kannst du die Seiten größer ziehen.</p>' : ''}
     ${flyer.pdfUrl ? `<p class="viewer__note"><a href="${escapeHtml(flyer.pdfUrl)}" target="_blank" rel="noopener noreferrer">Als PDF herunterladen</a> (Achtung: sehr groß, nur im WLAN)</p>` : ''}
-    ${isMk && flyer.viewerUrl ? `<p class="viewer__note">Klappt nicht? <a href="${escapeHtml(flyer.viewerUrl)}" target="_blank" rel="noopener noreferrer">Alternativ hier blättern</a> (Seite von Nientied)</p>` : ''}
-    ${viewer.store === 'marktkauf' ? `<p class="viewer__note">Etwas Leckeres im Prospekt gesehen? Unten auf der Startseite mit „🏷️ Angebot selbst markieren“ für alle eintragen.</p>` : ''}`;
+    ${isMk && flyer.pages?.length ? `<p class="viewer__note"><a href="${escapeHtml(pageUrl)}" target="_blank" rel="noopener noreferrer">Prospekt auf edeka.de öffnen</a></p>` : ''}
+    ${isMk && !storeOffers('marktkauf').length ? `<p class="viewer__note">Etwas Leckeres im Prospekt gesehen? Unten auf der Startseite mit „🏷️ Angebot selbst markieren“ für alle eintragen.</p>` : ''}`;
 }
 
 function renderOfferBrowser() {
@@ -1262,7 +1274,7 @@ function offerCardHtml(o) {
   const later = o.validFrom && o.validFrom > todayIso();
   return `
     <div class="ocard${onList ? ' is-on-list' : ''}">
-      ${o.image ? `<img class="ocard__img" src="${escapeHtml(o.image)}" alt="" loading="lazy" decoding="async">` : '<span class="ocard__img"></span>'}
+      ${o.image ? `<img class="ocard__img" src="${escapeHtml(o.image)}" alt="" loading="lazy" decoding="async" onerror="this.style.visibility='hidden'">` : '<span class="ocard__img"></span>'}
       <div class="ocard__text">
         ${o.brand ? `<span class="ocard__brand">${escapeHtml(o.brand)}</span>` : ''}
         <strong class="ocard__name">${escapeHtml(o.name)}</strong>
@@ -1281,18 +1293,18 @@ function renderOfferList() {
   const list = $('#offerList', els.viewerBody);
   if (!list) return;
   const q = normalize(viewer.query);
-  const all = aldiOffers();
+  const all = storeOffers(viewer.store);
   const offers = q
     ? all.filter((o) => normalize(`${o.brand} ${o.name} ${o.group}`).includes(q))
     : all;
 
   const sections = [];
   if (!q) {
-    const dealIds = new Set(getDeals().filter((d) => d.offer.auto).map((d) => d.offer.id));
+    const dealIds = new Set(getDeals().filter((d) => d.offer.auto && d.offer.store === viewer.store).map((d) => d.offer.id));
     const mine = all.filter((o) => dealIds.has(o.id));
     if (mine.length) sections.push(['⭐ Passt zu dir', mine]);
   }
-  const groups = state.prospekte?.aldi?.offers?.groups || [];
+  const groups = state.prospekte?.[viewer.store]?.offers?.groups || [];
   const byGroup = new Map();
   offers.forEach((o) => {
     if (!byGroup.has(o.group)) byGroup.set(o.group, []);
@@ -1312,9 +1324,9 @@ function renderOfferList() {
 }
 
 function addOfferToList(id) {
-  const offer = aldiOffers().find((o) => o.id === id);
+  const offer = storeOffers(viewer.store).find((o) => o.id === id);
   if (!offer) return;
-  addParsed([{ name: offer.name, qty: '' }], 'aldi');
+  addParsed([{ name: offer.name, qty: '' }], viewer.store);
   setTimeout(renderOfferList, 50);
 }
 
