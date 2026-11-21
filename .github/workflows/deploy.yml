@@ -40,6 +40,10 @@ jobs:
         run: node scripts/update-prospekte.mjs
         continue-on-error: true   # bei Ausfall: zuletzt gespeicherte Daten nutzen
 
+      - name: Diagnose EDEKA-Quellen (Marktkauf)
+        run: node scripts/probe-edeka.mjs
+        continue-on-error: true
+
       - name: Webseite zusammenstellen
         run: |
           mkdir -p _site

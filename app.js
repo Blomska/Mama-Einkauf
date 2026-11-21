@@ -1194,10 +1194,12 @@ function renderViewer() {
 }
 
 function renderFlyer(flyer) {
-  const pageUrl = state.prospekte?.[viewer.store]?.pageUrl || OFFER_LINKS[viewer.store];
+  const isMk = viewer.store === 'marktkauf';
+  // Marktkauf: offizielle EDEKA-Prospektseite des Markts (zuverlässiger als der Blätterkatalog-Anbieter)
+  const pageUrl = isMk ? OFFER_LINKS.marktkauf : (state.prospekte?.aldi?.pageUrl || OFFER_LINKS.aldi);
   const fallback = `
-    <a class="btn btn--ghost btn--block" href="${escapeHtml(pageUrl)}" target="_blank" rel="noopener noreferrer">
-      Webseite von ${viewer.store === 'aldi' ? 'Aldi' : 'Marktkauf'} öffnen ↗
+    <a class="btn btn--primary btn--block" href="${escapeHtml(pageUrl)}" target="_blank" rel="noopener noreferrer">
+      📰 Prospekt bei ${isMk ? 'EDEKA/Marktkauf' : 'Aldi'} ansehen ↗
     </a>`;
 
   if (!flyer) {
@@ -1216,7 +1218,9 @@ function renderFlyer(flyer) {
   }
 
   const actions = [];
-  if (flyer.viewerUrl && !flyer.pages?.length) {
+  if (isMk) {
+    actions.push(`<a class="btn btn--primary btn--block" href="${escapeHtml(pageUrl)}" target="_blank" rel="noopener noreferrer">📰 Prospekt durchblättern ↗</a>`);
+  } else if (flyer.viewerUrl && !flyer.pages?.length) {
     actions.push(`<a class="btn btn--primary btn--block" href="${escapeHtml(flyer.viewerUrl)}" target="_blank" rel="noopener noreferrer">📰 Prospekt durchblättern ↗</a>`);
   }
 
@@ -1229,7 +1233,7 @@ function renderFlyer(flyer) {
       </figure>`).join('')}</div>`;
   } else if (flyer.cover) {
     content = `
-      <a class="cover-link" href="${escapeHtml(flyer.viewerUrl)}" target="_blank" rel="noopener noreferrer">
+      <a class="cover-link" href="${escapeHtml(isMk ? pageUrl : flyer.viewerUrl)}" target="_blank" rel="noopener noreferrer">
         <img src="${escapeHtml(flyer.cover)}" alt="" onerror="this.parentElement.hidden=true">
       </a>`;
   }
@@ -1239,6 +1243,7 @@ function renderFlyer(flyer) {
     ${content}
     ${flyer.pages?.length ? '<p class="viewer__note">Tipp: Mit zwei Fingern kannst du die Seiten größer ziehen.</p>' : ''}
     ${flyer.pdfUrl ? `<p class="viewer__note"><a href="${escapeHtml(flyer.pdfUrl)}" target="_blank" rel="noopener noreferrer">Als PDF herunterladen</a> (Achtung: sehr groß, nur im WLAN)</p>` : ''}
+    ${isMk && flyer.viewerUrl ? `<p class="viewer__note">Klappt nicht? <a href="${escapeHtml(flyer.viewerUrl)}" target="_blank" rel="noopener noreferrer">Alternativ hier blättern</a> (Seite von Nientied)</p>` : ''}
     ${viewer.store === 'marktkauf' ? `<p class="viewer__note">Etwas Leckeres im Prospekt gesehen? Unten auf der Startseite mit „🏷️ Angebot selbst markieren“ für alle eintragen.</p>` : ''}`;
 }
 

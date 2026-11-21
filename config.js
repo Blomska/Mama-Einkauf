@@ -44,7 +44,8 @@ export const MAMA_FAVORITES = ['Skyr', 'Eier', 'Milch', 'Rinderhack', 'Avocados'
 
 /** Prospekt-Links (öffnen in neuem Tab). */
 export const OFFER_LINKS = {
-  marktkauf: 'https://www.kaufda.de/Luedinghausen/Marktkauf/p-r60',
+  // Offizielle EDEKA-Prospektseite von Marktkauf Nientied (EDEKA Markt-ID 10008010)
+  marktkauf: 'https://www.edeka.de/markt-id/10008010/prospekt.jsp',
   aldi: 'https://www.kaufda.de/Luedinghausen/ALDI-Nord/p-r43'
 };
 
