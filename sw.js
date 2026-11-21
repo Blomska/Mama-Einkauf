@@ -13,7 +13,7 @@
  * ------------------------------------------------------------------
  */
 
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v4';
 const APP_CACHE = `einkauf-app-${CACHE_VERSION}`;
 const CDN_CACHE = 'einkauf-cdn-v1';
 

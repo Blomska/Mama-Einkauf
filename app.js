@@ -32,7 +32,7 @@
  */
 
 import {
-  CATEGORIES, CATEGORY_BY_ID, DEFAULT_CATEGORY, categorize, normalize, parseItems
+  CATEGORIES, CATEGORY_BY_ID, DEFAULT_CATEGORY, categorize, normalize, parseItems, offerMatchScore
 } from './categories.js';
 import {
   firebaseConfig, LIST_ID, USE_ANONYMOUS_AUTH, OFFER_LINKS, MAMA_FAVORITES, isFirebaseConfigured
@@ -368,7 +368,8 @@ const state = {
   fresh: new Set(),    // gerade hinzugefügte IDs (Animation)
   flash: new Set(),    // Duplikate hervorheben
   offers: readJSON(LS.offersCache, {}), // { key: { name, store, price, until } }
-  offerDraft: {}       // Bearbeitungsstand im Angebots-Dialog
+  offerDraft: {},      // Bearbeitungsstand im Angebots-Dialog
+  prospekte: null      // data/prospekte.json (automatisch abgerufen)
 };
 
 const backend = isFirebaseConfigured() ? new FirebaseBackend() : new LocalBackend();
@@ -415,7 +416,78 @@ function activeOffer(name) {
 }
 
 function offerLabel(offer) {
-  return `${STORE_LABELS[offer.store]}${offer.price ? ` ${offer.price}` : ''}`;
+  const startsLater = offer.validFrom && offer.validFrom > todayIso();
+  const later = startsLater ? ` ab ${weekdayShort(offer.validFrom)}` : '';
+  return `${STORE_LABELS[offer.store]}${offer.price ? ` ${offer.price}` : ''}${later}`;
+}
+
+/** Heutiges Datum als YYYY-MM-DD (lokale Zeit). */
+function todayIso() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function parseIso(iso) {
+  const [y, m, d] = String(iso).split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function weekdayShort(iso) {
+  return parseIso(iso).toLocaleDateString('de-DE', { weekday: 'short' });
+}
+
+function formatRange(from, to) {
+  if (!from) return '';
+  const f = parseIso(from).toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' });
+  if (!to) return `ab ${f}`;
+  const t = parseIso(to).toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' });
+  return `${f} – ${t}`;
+}
+
+/* ---------- Automatische Angebote (Aldi-Daten aus data/prospekte.json) ---------- */
+
+const autoOfferCache = new Map();
+
+/** Aktuell gültige Aldi-Angebote (inkl. solcher, die diese Woche noch starten). */
+function aldiOffers() {
+  const offers = state.prospekte?.aldi?.offers?.offers || [];
+  const today = todayIso();
+  return offers.filter((o) => !o.validTo || o.validTo >= today);
+}
+
+/** Passendes Aldi-Angebot für einen Artikelnamen (oder null). */
+function autoOffer(name) {
+  const key = normalize(name);
+  if (autoOfferCache.has(key)) return autoOfferCache.get(key);
+  let best = null;
+  let bestScore = 0;
+  for (const o of aldiOffers()) {
+    const score = offerMatchScore(name, o.name);
+    if (score > bestScore) {
+      best = o;
+      bestScore = score;
+      if (score === 2) break;
+    }
+  }
+  const result = best ? {
+    auto: true,
+    store: 'aldi',
+    price: best.price,
+    name: best.name,
+    product: [best.brand, best.name].filter(Boolean).join(' '),
+    unit: best.unit,
+    validFrom: best.validFrom,
+    validTo: best.validTo,
+    image: best.image,
+    id: best.id
+  } : null;
+  autoOfferCache.set(key, result);
+  return result;
+}
+
+/** Angebot für einen Artikel: selbst markiert (Familie) hat Vorrang vor automatisch. */
+function getOffer(name) {
+  return activeOffer(name) || autoOffer(name);
 }
 
 /** Ende der Angebotswoche: kommender Samstag 23:59 (Sonntag → nächster Samstag). */
@@ -444,7 +516,7 @@ function getFavorites() {
     const key = normalize(name);
     if (!key || seen.has(key)) return;
     seen.add(key);
-    list.push({ key, name: freq[key]?.name || name, pinned, offer: activeOffer(name) });
+    list.push({ key, name: freq[key]?.name || name, pinned, offer: getOffer(name) });
   };
 
   MAMA_FAVORITES.forEach((name) => push(name, true));
@@ -520,7 +592,19 @@ const els = {
   offerUntil: $('#offerUntil'),
   offerNewName: $('#offerNewName'),
   offerNewAdd: $('#offerNewAdd'),
-  offerCancel: $('#offerCancel')
+  offerCancel: $('#offerCancel'),
+  addBtn: $('#addBtn'),
+  mic: $('#micBtn'),
+  suggest: $('#suggestions'),
+  greeting: $('#greeting'),
+  deals: $('#deals'),
+  dealsWrap: $('#dealsWrap'),
+  viewer: $('#prospektDialog'),
+  viewerTitle: $('#viewerTitle'),
+  viewerClose: $('#viewerClose'),
+  viewerWeeks: $('#viewerWeeks'),
+  viewerTabs: $('#viewerTabs'),
+  viewerBody: $('#viewerBody')
 };
 
 function itemHtml(item) {
@@ -532,9 +616,10 @@ function itemHtml(item) {
   const badges = [];
   if (item.store === 'marktkauf') badges.push('<span class="badge badge--marktkauf">Marktkauf</span>');
   if (item.store === 'aldi') badges.push('<span class="badge badge--aldi">Aldi</span>');
-  const offer = activeOffer(item.name);
+  const offer = item.done ? null : getOffer(item.name);
   if (offer) {
-    badges.push(`<span class="badge badge--offer badge--offer-${offer.store}">🏷️ Angebot ${escapeHtml(offerLabel(offer))}</span>`);
+    const title = offer.product ? ` title="${escapeHtml(`${offer.product}${offer.unit ? `, ${offer.unit}` : ''}`)}"` : '';
+    badges.push(`<span class="badge badge--offer badge--offer-${offer.store}"${title}>🏷️ Angebot ${escapeHtml(offerLabel(offer))}</span>`);
   } else if (item.isOffer) {
     badges.push(`<span class="badge badge--offer">🏷️ Angebot${item.offerPrice ? ` ${escapeHtml(item.offerPrice)}` : ''}</span>`);
   }
@@ -621,6 +706,9 @@ function render() {
   els.doneList.innerHTML = state.doneOpen ? done.map(itemHtml).join('') : '';
 
   renderFavorites();
+  renderProspektCards();
+  renderDeals();
+  updateGreeting();
   updateDocumentTitle(open.length);
 }
 
@@ -695,6 +783,7 @@ function hideToast() {
 function handleItems(rawItems) {
   state.items = rawItems.map(sanitizeItem).filter((i) => i.id && i.name);
   writeJSON(LS.cache, state.items);
+  vocabulary = null;
   render();
 }
 
@@ -709,7 +798,11 @@ function handleOffers(offers) {
 }
 
 function addFromText(text, store = state.addStore) {
-  const parsed = parseItems(text);
+  return addParsed(parseItems(text), store);
+}
+
+/** Fügt bereits zerlegte Artikel [{ name, qty }] hinzu. */
+function addParsed(parsed, store = state.addStore) {
   if (!parsed.length) return false;
 
   const openByName = new Map(state.items.filter((i) => !i.done).map((i) => [normalize(i.name), i]));
@@ -765,7 +858,7 @@ function addFromText(text, store = state.addStore) {
     message = message ? `${message} · ${dupText}` : dupText;
   }
   if (hiddenByFilter) message += ' – sichtbar unter „Alle“';
-  const offerHits = toAdd.map((i) => [i, activeOffer(i.name)]).filter(([, o]) => o);
+  const offerHits = toAdd.map((i) => [i, getOffer(i.name)]).filter(([, o]) => o);
   if (offerHits.length === 1) {
     const [i, o] = offerHits[0];
     message += ` · 🏷️ ${i.name} ist im Angebot bei ${offerLabel(o)}`;
@@ -965,6 +1058,407 @@ function saveOffers() {
   showToast(count ? `🏷️ ${count} Angebot${count === 1 ? '' : 'e'} markiert – gilt bis Samstag` : 'Angebote entfernt');
 }
 
+/* ---------- Prospekte & Angebote ---------- */
+
+async function loadProspekte() {
+  try {
+    const res = await fetch('./data/prospekte.json', { cache: 'no-cache' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    state.prospekte = await res.json();
+  } catch (err) {
+    console.warn('[Prospekte] nicht geladen:', err);
+    state.prospekte = null;
+  }
+  autoOfferCache.clear();
+  render();
+}
+
+function flyerFor(store, week = 'current') {
+  return state.prospekte?.[store]?.[week] || null;
+}
+
+function renderProspektCards() {
+  for (const store of ['marktkauf', 'aldi']) {
+    const suffix = store === 'aldi' ? 'Aldi' : 'Marktkauf';
+    const img = $(`#cover${suffix}`);
+    const label = $(`#valid${suffix}`);
+    const current = flyerFor(store, 'current');
+    const next = flyerFor(store, 'next');
+    const today = todayIso();
+    const currentValid = current && (!current.validTo || current.validTo >= today);
+
+    if (currentValid && current.cover && !img.dataset.failed) {
+      if (img.getAttribute('src') !== current.cover) {
+        img.onerror = () => { img.hidden = true; img.dataset.failed = '1'; };
+        img.src = current.cover;
+      }
+      img.hidden = false;
+    } else {
+      img.hidden = true;
+    }
+
+    let text = 'Prospekt ansehen';
+    if (currentValid && current.validTo) text = `gültig bis ${parseIso(current.validTo).toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' })}`;
+    if (next?.validFrom && (next.viewerUrl || next.pages?.length)) text += ` · ✨ Vorschau ab ${weekdayShort(next.validFrom)}`;
+    label.textContent = text;
+  }
+}
+
+/** Angebote, die zu Mamas Favoriten, der Liste oder oft Gekauftem passen. */
+function getDeals() {
+  const freq = readJSON(LS.freq, {});
+  const openNames = new Set(state.items.filter((i) => !i.done).map((i) => normalize(i.name)));
+  const names = [
+    ...MAMA_FAVORITES,
+    ...state.items.filter((i) => !i.done).map((i) => i.name),
+    ...Object.values(freq).sort((a, b) => b.count - a.count).slice(0, 15).map((f) => f.name)
+  ];
+  const seen = new Set();
+  const deals = [];
+  for (const name of names) {
+    const key = normalize(name);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const offer = getOffer(name);
+    if (offer) deals.push({ name, offer, onList: openNames.has(key), pinned: MAMA_FAVORITES.some((f) => normalize(f) === key) });
+  }
+  return deals.slice(0, 10);
+}
+
+function renderDeals() {
+  const deals = getDeals();
+  els.dealsWrap.hidden = deals.length === 0;
+  els.deals.innerHTML = deals.map((d) => `
+    <button type="button" class="deal deal--${d.offer.store}${d.onList ? ' is-on-list' : ''}" data-deal="${escapeHtml(d.name)}"
+            data-deal-store="${d.offer.store}"
+            aria-label="${escapeHtml(`${d.name}: ${d.offer.product || ''} im Angebot bei ${offerLabel(d.offer)}${d.onList ? ', steht schon auf der Liste' : ', antippen zum Hinzufügen'}`)}">
+      ${d.offer.image ? `<img src="${escapeHtml(d.offer.image)}" alt="" loading="lazy">` : '<span class="deal__icon" aria-hidden="true">🏷️</span>'}
+      <span class="deal__text">
+        <strong>${d.pinned ? '⭐ ' : ''}${escapeHtml(d.name)}</strong>
+        <small>${escapeHtml(offerLabel(d.offer))}</small>
+      </span>
+      <span class="deal__add" aria-hidden="true">${d.onList ? '✓' : '＋'}</span>
+    </button>`).join('');
+}
+
+/* ---------- Prospekt-Ansicht (Vollbild) ---------- */
+
+const viewer = { store: 'aldi', week: 'current', tab: 'angebote', query: '' };
+
+function openProspekt(store, tab) {
+  viewer.store = store;
+  viewer.week = 'current';
+  viewer.tab = tab || (store === 'aldi' && state.prospekte?.aldi?.offers ? 'angebote' : 'prospekt');
+  viewer.query = '';
+  renderViewer();
+  if (typeof els.viewer.showModal === 'function') els.viewer.showModal();
+  else els.viewer.setAttribute('open', '');
+  els.viewerBody.scrollTop = 0;
+}
+
+function closeViewer() {
+  if (els.viewer.open) els.viewer.close();
+}
+
+function renderViewer() {
+  const { store } = viewer;
+  const current = flyerFor(store, 'current');
+  const next = flyerFor(store, 'next');
+  if (viewer.week === 'next' && !next) viewer.week = 'current';
+  const hasOffers = store === 'aldi' && aldiOffers().length > 0;
+  if (viewer.tab === 'angebote' && (!hasOffers || viewer.week === 'next')) viewer.tab = 'prospekt';
+
+  els.viewer.className = `viewer viewer--${store}`;
+  els.viewerTitle.textContent = store === 'aldi' ? 'Aldi Nord' : 'Marktkauf Nientied';
+
+  // Wochen-Umschalter
+  const weekBtn = (week, label, flyer) => `
+    <button type="button" role="tab" data-week="${week}" aria-selected="${viewer.week === week}"
+            class="${viewer.week === week ? 'is-active' : ''}">
+      ${label}${flyer?.validFrom ? `<small>${escapeHtml(formatRange(flyer.validFrom, flyer.validTo))}</small>` : ''}
+    </button>`;
+  els.viewerWeeks.innerHTML = weekBtn('current', 'Diese Woche', current) + (next ? weekBtn('next', 'Nächste Woche', next) : '');
+  els.viewerWeeks.hidden = !next;
+
+  // Ansicht-Umschalter (nur Aldi, diese Woche)
+  els.viewerTabs.hidden = !(hasOffers && viewer.week === 'current');
+  $$('[data-tab]', els.viewerTabs).forEach((btn) => {
+    const active = btn.dataset.tab === viewer.tab;
+    btn.classList.toggle('is-active', active);
+    btn.setAttribute('aria-selected', String(active));
+    if (btn.dataset.tab === 'angebote') btn.innerHTML = `🛒 Angebote <small>${aldiOffers().length}</small>`;
+  });
+
+  if (viewer.tab === 'angebote') renderOfferBrowser();
+  else renderFlyer(viewer.week === 'next' ? next : current);
+}
+
+function renderFlyer(flyer) {
+  const pageUrl = state.prospekte?.[viewer.store]?.pageUrl || OFFER_LINKS[viewer.store];
+  const fallback = `
+    <a class="btn btn--ghost btn--block" href="${escapeHtml(pageUrl)}" target="_blank" rel="noopener noreferrer">
+      Webseite von ${viewer.store === 'aldi' ? 'Aldi' : 'Marktkauf'} öffnen ↗
+    </a>`;
+
+  if (!flyer) {
+    els.viewerBody.innerHTML = `<div class="viewer__empty"><p>Gerade ist kein Prospekt hinterlegt.</p>${fallback}</div>`;
+    return;
+  }
+  if (!flyer.viewerUrl && !flyer.pages?.length) {
+    els.viewerBody.innerHTML = `
+      <div class="viewer__empty">
+        <p class="viewer__soon">📅 Der Prospekt für <strong>${escapeHtml(formatRange(flyer.validFrom, flyer.validTo))}</strong>
+        erscheint meistens ab Donnerstag.</p>
+        <p>Die App holt ihn automatisch, sobald er online ist.</p>
+        ${fallback}
+      </div>`;
+    return;
+  }
+
+  const actions = [];
+  if (flyer.viewerUrl && !flyer.pages?.length) {
+    actions.push(`<a class="btn btn--primary btn--block" href="${escapeHtml(flyer.viewerUrl)}" target="_blank" rel="noopener noreferrer">📰 Prospekt durchblättern ↗</a>`);
+  }
+
+  let content = '';
+  if (flyer.pages?.length) {
+    content = `<p class="viewer__count">${flyer.pages.length} Seiten · einfach nach unten wischen</p><div class="pages">${flyer.pages.map((src, i) => `
+      <figure class="page">
+        <img src="${escapeHtml(src)}" alt="Prospekt Seite ${i + 1}" loading="${i < 2 ? 'eager' : 'lazy'}" decoding="async">
+        <figcaption>Seite ${i + 1} von ${flyer.pages.length}</figcaption>
+      </figure>`).join('')}</div>`;
+  } else if (flyer.cover) {
+    content = `
+      <a class="cover-link" href="${escapeHtml(flyer.viewerUrl)}" target="_blank" rel="noopener noreferrer">
+        <img src="${escapeHtml(flyer.cover)}" alt="" onerror="this.parentElement.hidden=true">
+      </a>`;
+  }
+
+  els.viewerBody.innerHTML = `
+    <div class="viewer__actions">${actions.join('')}</div>
+    ${content}
+    ${flyer.pages?.length ? '<p class="viewer__note">Tipp: Mit zwei Fingern kannst du die Seiten größer ziehen.</p>' : ''}
+    ${flyer.pdfUrl ? `<p class="viewer__note"><a href="${escapeHtml(flyer.pdfUrl)}" target="_blank" rel="noopener noreferrer">Als PDF herunterladen</a> (Achtung: sehr groß, nur im WLAN)</p>` : ''}
+    ${viewer.store === 'marktkauf' ? `<p class="viewer__note">Etwas Leckeres im Prospekt gesehen? Unten auf der Startseite mit „🏷️ Angebot selbst markieren“ für alle eintragen.</p>` : ''}`;
+}
+
+function renderOfferBrowser() {
+  els.viewerBody.innerHTML = `
+    <div class="obrowser__search">
+      <input type="search" id="offerSearch" placeholder="🔍 Angebote durchsuchen …" value="${escapeHtml(viewer.query)}"
+             aria-label="Angebote durchsuchen" autocomplete="off">
+    </div>
+    <div id="offerList"></div>`;
+  renderOfferList();
+}
+
+function offerCardHtml(o) {
+  const onList = state.items.some((i) => !i.done && offerMatchScore(i.name, o.name) === 2);
+  const later = o.validFrom && o.validFrom > todayIso();
+  return `
+    <div class="ocard${onList ? ' is-on-list' : ''}">
+      ${o.image ? `<img class="ocard__img" src="${escapeHtml(o.image)}" alt="" loading="lazy" decoding="async">` : '<span class="ocard__img"></span>'}
+      <div class="ocard__text">
+        ${o.brand ? `<span class="ocard__brand">${escapeHtml(o.brand)}</span>` : ''}
+        <strong class="ocard__name">${escapeHtml(o.name)}</strong>
+        <span class="ocard__unit">${escapeHtml([o.unit, o.basePrice].filter(Boolean).join(' · '))}</span>
+        ${later ? `<span class="ocard__later">ab ${escapeHtml(weekdayShort(o.validFrom))}</span>` : ''}
+      </div>
+      <div class="ocard__side">
+        <span class="ocard__price">${escapeHtml(o.price)}</span>
+        <button type="button" class="ocard__add" data-add-offer="${escapeHtml(o.id)}"
+                aria-label="${escapeHtml(o.name)} ${onList ? 'steht schon auf der Liste' : 'auf die Liste setzen'}">${onList ? '✓' : '＋'}</button>
+      </div>
+    </div>`;
+}
+
+function renderOfferList() {
+  const list = $('#offerList', els.viewerBody);
+  if (!list) return;
+  const q = normalize(viewer.query);
+  const all = aldiOffers();
+  const offers = q
+    ? all.filter((o) => normalize(`${o.brand} ${o.name} ${o.group}`).includes(q))
+    : all;
+
+  const sections = [];
+  if (!q) {
+    const dealIds = new Set(getDeals().filter((d) => d.offer.auto).map((d) => d.offer.id));
+    const mine = all.filter((o) => dealIds.has(o.id));
+    if (mine.length) sections.push(['⭐ Passt zu dir', mine]);
+  }
+  const groups = state.prospekte?.aldi?.offers?.groups || [];
+  const byGroup = new Map();
+  offers.forEach((o) => {
+    if (!byGroup.has(o.group)) byGroup.set(o.group, []);
+    byGroup.get(o.group).push(o);
+  });
+  [...byGroup.keys()]
+    .sort((a, b) => groups.indexOf(a) - groups.indexOf(b))
+    .forEach((g) => sections.push([g, byGroup.get(g)]));
+
+  list.innerHTML = sections.length
+    ? sections.map(([title, items]) => `
+        <section class="ogroup">
+          <h3 class="ogroup__title">${escapeHtml(title)} <span>${items.length}</span></h3>
+          ${items.map(offerCardHtml).join('')}
+        </section>`).join('')
+    : `<p class="viewer__empty">Nichts gefunden für „${escapeHtml(viewer.query)}“.</p>`;
+}
+
+function addOfferToList(id) {
+  const offer = aldiOffers().find((o) => o.id === id);
+  if (!offer) return;
+  addParsed([{ name: offer.name, qty: '' }], 'aldi');
+  setTimeout(renderOfferList, 50);
+}
+
+/* ---------- Spracheingabe ---------- */
+
+const speech = { rec: null, listening: false, base: '' };
+
+function initSpeech() {
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!Recognition) return;
+  els.mic.hidden = false;
+
+  els.mic.addEventListener('click', () => {
+    if (speech.listening) {
+      speech.rec?.stop();
+      return;
+    }
+    const rec = new Recognition();
+    rec.lang = 'de-DE';
+    rec.interimResults = true;
+    rec.continuous = false;
+    rec.maxAlternatives = 1;
+    speech.rec = rec;
+    speech.base = els.input.value.trim();
+
+    rec.onstart = () => {
+      speech.listening = true;
+      els.mic.setAttribute('aria-pressed', 'true');
+      els.input.placeholder = 'Ich höre zu … 🎤';
+      vibrate(15);
+    };
+    rec.onresult = (event) => {
+      const transcript = Array.from(event.results).map((r) => r[0].transcript).join(' ').trim();
+      els.input.value = speech.base ? `${speech.base}, ${transcript}` : transcript;
+      autoGrow();
+      updateSuggestions();
+    };
+    rec.onerror = (event) => {
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        showToast('Bitte das Mikrofon erlauben – oder das 🎤 auf der Tastatur nutzen.');
+      } else if (event.error === 'no-speech') {
+        showToast('Ich habe nichts gehört. Einfach nochmal versuchen.');
+      }
+    };
+    rec.onend = () => {
+      speech.listening = false;
+      els.mic.setAttribute('aria-pressed', 'false');
+      els.input.placeholder = 'z. B. Milch, Eier, 500 g Rinderhack';
+      if (els.input.value.trim() && els.input.value.trim() !== speech.base) {
+        els.addBtn.classList.add('is-pulse');
+        setTimeout(() => els.addBtn.classList.remove('is-pulse'), 2400);
+        showToast('Passt das so? Dann auf „Auf die Liste“ tippen. 👍');
+      }
+    };
+    try {
+      rec.start();
+    } catch (err) {
+      console.warn('[Sprache]', err);
+    }
+  });
+}
+
+/* ---------- Vorschläge beim Tippen ---------- */
+
+let vocabulary = null;
+
+function buildVocabulary() {
+  const map = new Map(); // key → { name, weight }
+  const add = (name, weight) => {
+    const clean = String(name || '').trim();
+    const key = normalize(clean);
+    if (key.length < 2) return;
+    const existing = map.get(key);
+    if (!existing || existing.weight < weight) map.set(key, { name: clean, weight });
+  };
+  // Wörterbuch-Begriffe (nur "schöne" Einträge)
+  CATEGORIES.forEach((cat) => cat.keywords.forEach((kw) => {
+    if (/^[a-zäöüß][a-zäöüß-]{3,}$/.test(kw)) add(kw.charAt(0).toUpperCase() + kw.slice(1), 1);
+  }));
+  STARTER_FAVORITES.forEach((n) => add(n, 5));
+  state.items.forEach((i) => add(i.name, 20));
+  Object.values(readJSON(LS.freq, {})).forEach((f) => add(f.name, 20 + f.count * 5));
+  MAMA_FAVORITES.forEach((n) => add(n, 100));
+  vocabulary = [...map.values()];
+}
+
+/** Letzter Teil der Eingabe (nach Komma / "und"). */
+function currentSegment(text) {
+  const parts = String(text).split(/[\n;,]|\s+und\s+/i);
+  return parts[parts.length - 1].replace(/^\s*\d+\s*(?:x|×|g|kg|l|ml|stk\.?|stück)?\s+/i, '').trim();
+}
+
+function updateSuggestions() {
+  const seg = normalize(currentSegment(els.input.value));
+  if (seg.length < 2) {
+    els.suggest.hidden = true;
+    els.suggest.innerHTML = '';
+    return;
+  }
+  if (!vocabulary) buildVocabulary();
+  const matches = vocabulary
+    .map((v) => {
+      const key = normalize(v.name);
+      let score = 0;
+      if (key === seg) score = 3;
+      else if (key.startsWith(seg)) score = 2;
+      else if (key.split(/[\s-]/).some((w) => w.startsWith(seg))) score = 1;
+      return { ...v, score };
+    })
+    .filter((v) => v.score > 0)
+    .sort((a, b) => b.score - a.score || b.weight - a.weight || a.name.length - b.name.length)
+    .filter((v, i, arr) => {
+      // "Banane" und "Bananen" nur einmal zeigen
+      const stemOf = (n) => normalize(n).replace(/(en|n|s|e)$/, '');
+      return arr.findIndex((o) => stemOf(o.name) === stemOf(v.name)) === i;
+    })
+    .slice(0, 6);
+
+  els.suggest.hidden = matches.length === 0;
+  els.suggest.innerHTML = matches.map((m) => {
+    const cat = CATEGORY_BY_ID[categoryFor(m.name)];
+    const offer = getOffer(m.name);
+    return `
+      <button type="button" class="suggest__item" role="option" data-suggest="${escapeHtml(m.name)}">
+        <span aria-hidden="true">${cat.icon}</span> ${escapeHtml(m.name)}
+        ${offer ? `<span class="suggest__offer">🏷️ ${escapeHtml(offerLabel(offer))}</span>` : ''}
+      </button>`;
+  }).join('');
+}
+
+function applySuggestion(name) {
+  const text = els.input.value;
+  const seg = currentSegment(text);
+  const idx = text.lastIndexOf(seg);
+  els.input.value = idx >= 0 ? text.slice(0, idx) + name : name;
+  els.suggest.hidden = true;
+  els.form.requestSubmit();
+}
+
+/* ---------- Begrüßung ---------- */
+
+function updateGreeting() {
+  const h = new Date().getHours();
+  const hello = h < 11 ? 'Guten Morgen! ☀️' : h < 17 ? 'Hallo! 👋' : 'Guten Abend! 🌙';
+  const open = state.items.filter((i) => !i.done).length;
+  const sub = open === 0 ? 'Was brauchst du?' : 'Was fehlt noch?';
+  els.greeting.textContent = `${hello} ${sub}`;
+}
+
 /* ---------- WhatsApp teilen ---------- */
 
 function buildShareText() {
@@ -984,7 +1478,7 @@ function buildShareText() {
       if (!catItems.length) continue;
       lines.push(`${cat.icon} _${cat.name}_`);
       catItems.forEach((i) => {
-        const o = activeOffer(i.name);
+        const o = getOffer(i.name);
         const offer = o ? ` 🏷️ Angebot ${offerLabel(o)}` : (i.isOffer ? ` 🏷️${i.offerPrice ? ` ${i.offerPrice}` : ''}` : '');
         lines.push(`• ${i.qty ? `${i.qty} ` : ''}${i.name}${offer}`);
       });
@@ -1098,11 +1592,19 @@ function bindEvents() {
     if (addFromText(els.input.value)) {
       els.input.value = '';
       autoGrow();
+      updateSuggestions();
     } else {
       els.input.focus();
     }
   });
-  els.input.addEventListener('input', autoGrow);
+  els.input.addEventListener('input', () => {
+    autoGrow();
+    updateSuggestions();
+  });
+  els.suggest.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-suggest]');
+    if (btn) applySuggestion(btn.dataset.suggest);
+  });
   els.input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
@@ -1155,6 +1657,44 @@ function bindEvents() {
 
   // Teilen
   els.share.addEventListener('click', shareViaWhatsApp);
+
+  // Prospekte & Angebote
+  $$('[data-open-prospekt]').forEach((btn) => {
+    btn.addEventListener('click', () => openProspekt(btn.dataset.openProspekt));
+  });
+  els.deals.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-deal]');
+    if (!btn) return;
+    if (btn.classList.contains('is-on-list')) {
+      showToast(`„${btn.dataset.deal}“ steht schon auf der Liste ✓`);
+      return;
+    }
+    addFromText(btn.dataset.deal, btn.dataset.dealStore);
+  });
+  els.viewerClose.addEventListener('click', closeViewer);
+  els.viewerWeeks.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-week]');
+    if (!btn) return;
+    viewer.week = btn.dataset.week;
+    renderViewer();
+    els.viewerBody.scrollTop = 0;
+  });
+  els.viewerTabs.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-tab]');
+    if (!btn) return;
+    viewer.tab = btn.dataset.tab;
+    renderViewer();
+    els.viewerBody.scrollTop = 0;
+  });
+  els.viewerBody.addEventListener('input', (e) => {
+    if (e.target.id !== 'offerSearch') return;
+    viewer.query = e.target.value;
+    renderOfferList();
+  });
+  els.viewerBody.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-add-offer]');
+    if (btn && btn.textContent.trim() !== '✓') addOfferToList(btn.dataset.addOffer);
+  });
 
   // Angebote markieren
   els.offerBtn.addEventListener('click', openOffers);
@@ -1226,12 +1766,13 @@ function bindEvents() {
 
 function init() {
   // Prospekt-Links
-  $('#offerMarktkauf').href = OFFER_LINKS.marktkauf;
-  $('#offerAldi').href = OFFER_LINKS.aldi;
+  loadProspekte();
+  updateGreeting();
 
   buildCategoryGrid();
   bindEvents();
   initWakeLock();
+  initSpeech();
   registerServiceWorker();
 
   if (backend instanceof FirebaseBackend) {

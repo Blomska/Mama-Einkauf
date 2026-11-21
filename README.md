@@ -11,7 +11,10 @@ Ohne Login, mit Echtzeit-Abgleich für die ganze Familie, installierbar als App 
 - **„Oft gekauft“:** Die häufigsten Artikel lassen sich mit einem Tipp wieder hinzufügen. Mamas feste Favoriten (`MAMA_FAVORITES` in `config.js`) stehen immer vorne, mit ⭐.
 - **Angebote markieren:** Wer im Prospekt etwas entdeckt, tippt auf „🏷️ Angebote markieren“ und wählt den Laden, der Preis ist optional. Das Angebot erscheint für die ganze Familie als farbiges Schild an Favoriten und Listeneinträgen und läuft am Samstagabend automatisch ab.
 - **Abhaken mit Animation**, ein einklappbarer Bereich „Im Einkaufswagen“ und **„Abgehakte löschen“** mit Rückgängig.
-- **Display anlassen** (Screen Wake Lock), **WhatsApp-Teilen** und **Prospekt-Links** für Lüdinghausen.
+- **Prospekte direkt in der App:** Der Aldi-Prospekt lässt sich Seite für Seite durchblättern, für diese und die nächste Woche. Dazu kommen alle Aldi-Angebote als durchsuchbare Liste mit Bild und Preis, ein Tipp auf ＋ setzt ein Angebot auf die Liste. Für Marktkauf Nientied gibt es Titelbild, Gültigkeit und den Blätterkatalog.
+- **Automatische Angebots-Erkennung:** Steht z. B. Avocado im Aldi-Angebot, bekommen der Favorit „Avocados“ und der Listeneintrag automatisch ein 🏷️-Schild mit Preis.
+- **Spracheingabe (🎤)** und **Vorschläge beim Tippen**.
+- **Display anlassen** (Screen Wake Lock) und **WhatsApp-Teilen**.
 - **Offline-fähig:** Was im Funkloch abgehakt wird, gleicht sich später automatisch ab.
 
 ## Dateien
@@ -24,6 +27,8 @@ Ohne Login, mit Echtzeit-Abgleich für die ganze Familie, installierbar als App 
 | `categories.js` | Kategorien, Keyword-Wörterbuch, Eingabe-Parser (hier erweitern) |
 | `config.js` | **Hier tragen Sie die Firebase-Config ein**, außerdem Listen-Name und Prospekt-Links |
 | `manifest.json`, `sw.js`, `icons/` | PWA (Startbildschirm, Offline) |
+| `scripts/update-prospekte.mjs` | Holt Prospekte und Angebote nach `data/prospekte.json` |
+| `.github/workflows/deploy.yml` | Ruft die Prospekte täglich ab und veröffentlicht die App |
 
 > Solange in `config.js` noch die Platzhalter stehen, läuft die App im **Demo-Modus**. Dann funktioniert alles, die Liste wird aber nur auf dem jeweiligen Gerät gespeichert.
 
@@ -83,10 +88,11 @@ export const LIST_ID = 'familie-einkauf'; // gleicher Name = gleiche Liste auf a
 
 ### 4. Über GitHub Pages veröffentlichen
 
-1. Committen und pushen Sie alle Dateien in das GitHub-Repository, auf den Branch `main`.
-2. Öffnen Sie auf GitHub **Settings → Pages → Build and deployment**, wählen Sie als *Source* **Deploy from a branch**, als Branch **`main`** und als Ordner **`/ (root)`** und klicken Sie auf **Save**.
-3. Nach 1–2 Minuten ist die App erreichbar unter `https://<ihr-github-name>.github.io/<repo-name>/`.
-4. Tragen Sie die Domain in Firebase ein: **Authentication → Einstellungen → Autorisierte Domains → Domain hinzufügen** → `<ihr-github-name>.github.io`.
+1. Committen und pushen Sie alle Dateien in das GitHub-Repository.
+2. Öffnen Sie auf GitHub **Settings → Pages → Build and deployment** und wählen Sie als *Source* **GitHub Actions**.
+3. Der Workflow „Prospekte aktualisieren & veröffentlichen“ läuft bei jedem Push und **zweimal täglich** automatisch. Er holt die aktuellen Prospekte und Angebote und veröffentlicht die App. Von Hand starten können Sie ihn unter **Actions → Workflow → Run workflow**.
+4. Die App ist erreichbar unter `https://<ihr-github-name>.github.io/<Repo-Name>/`. **Achten Sie auf die Groß- und Kleinschreibung des Repo-Namens!**
+5. Tragen Sie die Domain in Firebase ein: **Authentication → Einstellungen → Autorisierte Domains** → `<ihr-github-name>.github.io`.
 
 **Auf dem Handy installieren**
 
@@ -104,6 +110,20 @@ Danach startet die Liste wie eine normale App im Vollbild.
 - **Mamas Favoriten ändern:** Passen Sie dazu `MAMA_FAVORITES` in `config.js` an.
 - **Nach Änderungen am Code:** Zählen Sie in `sw.js` die `CACHE_VERSION` hoch (z. B. `v2`). Die Geräte laden dann beim nächsten Öffnen automatisch die neue Version.
 - **Angebote (Zukunft):** Jeder Artikel hat schon die Felder `isOffer` und `offerPrice`. Ist `isOffer: true` gesetzt, zeigt die App ein 🏷️-Angebots-Badge an. Diese Felder kann später ein automatischer Angebots-Feed befüllen.
+
+## Prospekte & Angebote (automatisch)
+
+Der GitHub-Workflow startet `scripts/update-prospekte.mjs`. Das Skript liest diese Quellen aus:
+
+| Quelle | Was |
+|---|---|
+| `aldi-nord.de/prospekte/aldi-aktuell.html` & `…/aldi-vorschau.html` | Prospektseiten als Bilder (diese und nächste Woche) und PDF-Link |
+| `aldi-nord.de/angebote.html` | Alle Aldi-Angebote mit Name, Marke, Preis, Gültigkeit und Bild |
+| `edeka-nientied.de/angebote-marktkauf-nientied-luedinghausen/` | Marktkauf: Gültigkeit, Titelbild und Link zum Blätterkatalog |
+
+- Fällt eine Quelle aus, bleiben die zuletzt gespeicherten Daten erhalten.
+- Ändern die Shops ihre Webseiten, muss eventuell das Skript angepasst werden. Die App funktioniert in diesem Fall trotzdem weiter, nur ohne neue Prospekte.
+- Lokal testen: `node scripts/update-prospekte.mjs` (Node 18+).
 
 ## Lokal testen
 

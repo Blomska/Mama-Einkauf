@@ -1,0 +1,58 @@
+# Holt täglich die aktuellen Prospekte & Angebote (Aldi Nord, Marktkauf
+# Nientied Lüdinghausen) und veröffentlicht die App auf GitHub Pages.
+#
+# Einmalig einrichten: GitHub → Settings → Pages → Source: "GitHub Actions"
+name: Prospekte aktualisieren & veröffentlichen
+
+on:
+  push:
+    branches: [main, ccr-a6e722a0-k5p30p]
+  schedule:
+    - cron: '17 4 * * *'    # täglich ca. 5–6 Uhr deutscher Zeit
+    - cron: '17 15 * * *'   # täglich ca. 16–17 Uhr (Marktkauf-Folgewoche ab Donnerstag)
+  workflow_dispatch:        # manuell: Actions → "Run workflow"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Code holen
+        uses: actions/checkout@v4
+
+      - name: Node einrichten
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Prospekte & Angebote abrufen
+        run: node scripts/update-prospekte.mjs
+        continue-on-error: true   # bei Ausfall: zuletzt gespeicherte Daten nutzen
+
+      - name: Webseite zusammenstellen
+        run: |
+          mkdir -p _site
+          cp -r index.html style.css app.js categories.js config.js manifest.json sw.js .nojekyll icons data _site/
+
+      - name: Pages konfigurieren
+        uses: actions/configure-pages@v5
+
+      - name: Hochladen
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Veröffentlichen
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -331,3 +331,43 @@ export function parseItems(text) {
   }
   return result;
 }
+
+/* ------------------------------------------------------------------
+ * Angebots-Abgleich: passt ein Angebot ("Frische Milch") zu einem
+ * Artikel auf der Liste ("Milch")?
+ *  - gleiches Wort (Plural egal): "Avocados" ↔ "Avocado"
+ *  - Kopf eines zusammengesetzten Wortes: "Milch" ↔ "Vollmilch"
+ *  - Wortanfang bei längeren Begriffen: "Rinderhack" ↔ "Rinderhackfleisch"
+ *  - Nicht: "Milch" ↔ "Milchmäuse" (anderes Produkt)
+ * ------------------------------------------------------------------ */
+
+function stem(word) {
+  return word.length > 4 ? word.replace(/(en|n|s|e)$/, '') : word;
+}
+
+function tokens(text) {
+  return normalize(text).split(/[^a-z0-9äöüéèàç]+/).filter(Boolean);
+}
+
+/**
+ * @returns {number} 0 = passt nicht, 1 = passt (Teilwort), 2 = passt genau
+ */
+export function offerMatchScore(itemName, offerName) {
+  const item = tokens(itemName);
+  const offer = tokens(offerName).map(stem);
+  if (!item.length || !offer.length) return 0;
+
+  if (item.length > 1) {
+    return offer.join(' ').includes(item.map(stem).join(' ')) ? 2 : 0;
+  }
+
+  const key = stem(item[0]);
+  if (key.length < 3) return 0;
+  let best = 0;
+  for (const word of offer) {
+    if (word === key) return 2;
+    if (key.length >= 4 && word.endsWith(key)) best = 1;
+    else if (key.length >= 6 && word.startsWith(key)) best = 1;
+  }
+  return best;
+}
