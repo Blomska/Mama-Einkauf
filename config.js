@@ -35,6 +35,13 @@ export const LIST_ID = 'familie-einkauf';
  */
 export const USE_ANONYMOUS_AUTH = true;
 
+/**
+ * Mamas feste Favoriten: stehen bei "Oft gekauft" immer ganz vorne
+ * (mit ⭐), egal wie oft sie schon gekauft wurden.
+ * Reihenfolge = Anzeige-Reihenfolge. Einfach ergänzen oder ändern.
+ */
+export const MAMA_FAVORITES = ['Skyr', 'Eier', 'Milch', 'Rinderhack', 'Avocados'];
+
 /** Prospekt-Links (öffnen in neuem Tab). */
 export const OFFER_LINKS = {
   marktkauf: 'https://www.kaufda.de/Luedinghausen/Marktkauf/p-r60',

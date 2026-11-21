@@ -8,7 +8,8 @@ Ohne Login, mit Echtzeit-Abgleich für die ganze Familie, installierbar als App 
 - **Smart-Paste:** `2x Milch, 500g Hackfleisch; Bananen und Brot` wird zu vier Artikeln mit Mengen. Funktioniert auch mit Diktat und mit Text, der aus WhatsApp kopiert wurde.
 - **Laden-Auswahl** (Beide / Marktkauf / Aldi) und **Filter-Tabs** mit Zählern.
 - **Automatische Kategorien** in Laufweg-Reihenfolge. Korrigierte Kategorien merkt sich die App.
-- **„Oft gekauft“:** Die häufigsten Artikel lassen sich mit einem Tipp wieder hinzufügen.
+- **„Oft gekauft“:** Die häufigsten Artikel lassen sich mit einem Tipp wieder hinzufügen. Mamas feste Favoriten (`MAMA_FAVORITES` in `config.js`) stehen immer vorne, mit ⭐.
+- **Angebote markieren:** Wer im Prospekt etwas entdeckt, tippt auf „🏷️ Angebote markieren“ und wählt den Laden, der Preis ist optional. Das Angebot erscheint für die ganze Familie als farbiges Schild an Favoriten und Listeneinträgen und läuft am Samstagabend automatisch ab.
 - **Abhaken mit Animation**, ein einklappbarer Bereich „Im Einkaufswagen“ und **„Abgehakte löschen“** mit Rückgängig.
 - **Display anlassen** (Screen Wake Lock), **WhatsApp-Teilen** und **Prospekt-Links** für Lüdinghausen.
 - **Offline-fähig:** Was im Funkloch abgehakt wird, gleicht sich später automatisch ab.
@@ -50,6 +51,11 @@ service cloud.firestore {
       allow create, update: if request.auth != null
         && request.resource.data.name is string
         && request.resource.data.name.size() <= 80;
+    }
+    match /lists/{listId}/offers/{offerId} {
+      allow read, delete: if request.auth != null;
+      allow create, update: if request.auth != null
+        && request.resource.data.store in ['marktkauf', 'aldi'];
     }
   }
 }
@@ -95,6 +101,7 @@ Danach startet die Liste wie eine normale App im Vollbild.
 
 - **Neue Begriffe für Kategorien:** Tragen Sie sie in `categories.js` in das passende `keywords`-Array ein, in Kleinbuchstaben. Ein vorangestelltes `=` bedeutet „nur als ganzes Wort“, damit z. B. `=ei` nicht in „Reis“ greift.
 - **Prospekt-Links ändern:** Das geht über `OFFER_LINKS` in `config.js`.
+- **Mamas Favoriten ändern:** Passen Sie dazu `MAMA_FAVORITES` in `config.js` an.
 - **Nach Änderungen am Code:** Zählen Sie in `sw.js` die `CACHE_VERSION` hoch (z. B. `v2`). Die Geräte laden dann beim nächsten Öffnen automatisch die neue Version.
 - **Angebote (Zukunft):** Jeder Artikel hat schon die Felder `isOffer` und `offerPrice`. Ist `isOffer: true` gesetzt, zeigt die App ein 🏷️-Angebots-Badge an. Diese Felder kann später ein automatischer Angebots-Feed befüllen.
 

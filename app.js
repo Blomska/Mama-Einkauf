@@ -21,6 +21,13 @@
  *   isOffer:    boolean  – für spätere Angebots-Feeds
  *   offerPrice: string   – z. B. "1,99 €"
  * }
+ *
+ * Angebote (Firestore: lists/{LIST_ID}/offers/{normalisierterName}):
+ * { name: "Skyr", store: "aldi" | "marktkauf", price: "0,99 €", until: ms }
+ * Ein Angebot gilt automatisch bis Samstagabend der laufenden Woche und
+ * wird an allen passenden Artikeln und Favoriten angezeigt.
+ * Die Item-Felder isOffer/offerPrice bleiben für einen späteren
+ * automatischen Angebots-Feed reserviert.
  * ------------------------------------------------------------------
  */
 
@@ -28,7 +35,7 @@ import {
   CATEGORIES, CATEGORY_BY_ID, DEFAULT_CATEGORY, categorize, normalize, parseItems
 } from './categories.js';
 import {
-  firebaseConfig, LIST_ID, USE_ANONYMOUS_AUTH, OFFER_LINKS, isFirebaseConfigured
+  firebaseConfig, LIST_ID, USE_ANONYMOUS_AUTH, OFFER_LINKS, MAMA_FAVORITES, isFirebaseConfigured
 } from './config.js';
 
 /* ================================================================
@@ -40,7 +47,7 @@ const FIREBASE_BASE = `https://www.gstatic.com/firebasejs/${FIREBASE_VERSION}`;
 
 const STORE_LABELS = { both: 'Beide / Egal', marktkauf: 'Marktkauf', aldi: 'Aldi' };
 const CHECK_ANIMATION_MS = 600;
-const FAVORITES_LIMIT = 10;
+const FAVORITES_LIMIT = 12;
 const STARTER_FAVORITES = ['Milch', 'Brot', 'Eier', 'Butter', 'Bananen', 'Äpfel', 'Käse', 'Joghurt', 'Kaffee', 'Tomaten'];
 
 const LS = {
@@ -49,7 +56,9 @@ const LS = {
   doneOpen: 'einkauf:doneOpen',
   filter: 'einkauf:filter',
   cache: `einkauf:cache:${LIST_ID}`,
-  demoItems: `einkauf:demo:${LIST_ID}`
+  demoItems: `einkauf:demo:${LIST_ID}`,
+  demoOffers: `einkauf:demo-offers:${LIST_ID}`,
+  offersCache: `einkauf:offers:${LIST_ID}`
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -162,6 +171,27 @@ class LocalBackend {
     this.items = this.items.filter((i) => !ids.has(i.id)).concat(items);
     this.emit();
   }
+
+  startOffers(onOffers) {
+    this.onOffers = onOffers;
+    this.offers = readJSON(LS.demoOffers, {});
+    window.addEventListener('storage', (e) => {
+      if (e.key === LS.demoOffers) {
+        this.offers = readJSON(LS.demoOffers, {});
+        onOffers({ ...this.offers });
+      }
+    });
+    onOffers({ ...this.offers });
+  }
+
+  setOffers(changes) {
+    for (const [key, offer] of Object.entries(changes)) {
+      if (offer) this.offers[key] = offer;
+      else delete this.offers[key];
+    }
+    writeJSON(LS.demoOffers, this.offers);
+    this.onOffers?.({ ...this.offers });
+  }
 }
 
 /** Firebase Firestore mit Echtzeit-Sync & Offline-Cache. */
@@ -200,6 +230,7 @@ class FirebaseBackend {
       this.db = fs.getFirestore(app);
     }
     this.col = fs.collection(this.db, 'lists', LIST_ID, 'items');
+    this.offersCol = fs.collection(this.db, 'lists', LIST_ID, 'offers');
 
     if (authMod) {
       const auth = authMod.getAuth(app);
@@ -219,7 +250,7 @@ class FirebaseBackend {
       window.addEventListener('online', signIn);
       // Nach (Neu-)Anmeldung Listener neu aufbauen, falls er vorher abgelehnt wurde
       authMod.onAuthStateChanged(auth, (user) => {
-        if (user && this.listenerFailed) this.subscribe();
+        if (user && (this.listenerFailed || this.offersFailed)) this.subscribe();
       });
     }
 
@@ -247,6 +278,42 @@ class FirebaseBackend {
           : undefined);
       }
     );
+
+    // Angebote (eigene Sammlung). Fehler hier blockieren die Liste nicht.
+    this.offersFailed = false;
+    this.unsubscribeOffers?.();
+    this.unsubscribeOffers = fs.onSnapshot(
+      this.offersCol,
+      (snap) => {
+        const offers = {};
+        snap.docs.forEach((d) => { offers[d.id] = d.data(); });
+        this.onOffers?.(offers);
+      },
+      (err) => {
+        console.warn('[Firebase] Angebote nicht lesbar:', err.code || err);
+        this.offersFailed = true;
+      }
+    );
+  }
+
+  startOffers(onOffers) {
+    this.onOffers = onOffers;
+  }
+
+  async setOffers(changes) {
+    await this.ready;
+    const batch = this.fs.writeBatch(this.db);
+    for (const [key, offer] of Object.entries(changes)) {
+      const ref = this.fs.doc(this.offersCol, key);
+      if (offer) batch.set(ref, offer);
+      else batch.delete(ref);
+    }
+    batch.commit().catch((err) => {
+      console.error('[Firebase] Angebote speichern fehlgeschlagen:', err);
+      showToast(err.code === 'permission-denied'
+        ? 'Angebote: Firestore-Regeln noch nicht aktualisiert (siehe README).'
+        : 'Angebote konnten nicht gespeichert werden.');
+    });
   }
 
   ref(id) {
@@ -299,7 +366,9 @@ const state = {
   editCategory: DEFAULT_CATEGORY,
   checking: new Set(), // IDs, die gerade abgehakt werden (Animation)
   fresh: new Set(),    // gerade hinzugefügte IDs (Animation)
-  flash: new Set()     // Duplikate hervorheben
+  flash: new Set(),    // Duplikate hervorheben
+  offers: readJSON(LS.offersCache, {}), // { key: { name, store, price, until } }
+  offerDraft: {}       // Bearbeitungsstand im Angebots-Dialog
 };
 
 const backend = isFirebaseConfigured() ? new FirebaseBackend() : new LocalBackend();
@@ -338,20 +407,77 @@ function bumpFrequency(names) {
   writeJSON(LS.freq, freq);
 }
 
+/** Aktives (nicht abgelaufenes) Angebot für einen Artikelnamen. */
+function activeOffer(name) {
+  const offer = state.offers[normalize(name)];
+  if (!offer || !offer.store || (offer.until && offer.until < Date.now())) return null;
+  return offer;
+}
+
+function offerLabel(offer) {
+  return `${STORE_LABELS[offer.store]}${offer.price ? ` ${offer.price}` : ''}`;
+}
+
+/** Ende der Angebotswoche: kommender Samstag 23:59 (Sonntag → nächster Samstag). */
+function offerWeekEnd(from = new Date()) {
+  const d = new Date(from);
+  const daysToSaturday = (6 - d.getDay() + 7) % 7;
+  d.setDate(d.getDate() + daysToSaturday);
+  d.setHours(23, 59, 59, 0);
+  return d.getTime();
+}
+
+/**
+ * Favoriten in dieser Reihenfolge:
+ *   1. Favoriten mit aktuellem Angebot
+ *   2. Mamas feste Favoriten (config.js, ⭐)
+ *   3. Häufig gekaufte Artikel
+ *   4. Startvorschläge
+ * Artikel, die schon offen auf der Liste stehen, werden ausgeblendet.
+ */
 function getFavorites() {
   const freq = readJSON(LS.freq, {});
   const openNames = new Set(state.items.filter((i) => !i.done).map((i) => normalize(i.name)));
-  const list = Object.entries(freq)
-    .map(([key, v]) => ({ key, ...v }))
-    .sort((a, b) => b.count - a.count || b.last - a.last);
-
-  // Startvorschläge auffüllen, solange noch wenig gelernt wurde
-  for (const name of STARTER_FAVORITES) {
+  const seen = new Set();
+  const list = [];
+  const push = (name, pinned) => {
     const key = normalize(name);
-    if (!freq[key]) list.push({ key, name, count: 0, last: 0 });
-  }
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    list.push({ key, name: freq[key]?.name || name, pinned, offer: activeOffer(name) });
+  };
 
-  return list.filter((f) => !openNames.has(f.key)).slice(0, FAVORITES_LIMIT);
+  MAMA_FAVORITES.forEach((name) => push(name, true));
+  Object.values(freq)
+    .sort((a, b) => b.count - a.count || b.last - a.last)
+    .forEach((f) => push(f.name, false));
+  STARTER_FAVORITES.forEach((name) => push(name, false));
+
+  const visible = list.filter((f) => !openNames.has(f.key));
+  // Angebote nach vorne, sonst Reihenfolge beibehalten (stabile Sortierung)
+  visible.sort((a, b) => Number(Boolean(b.offer)) - Number(Boolean(a.offer)));
+  const pinnedCount = visible.filter((f) => f.pinned || f.offer).length;
+  return visible.slice(0, Math.max(FAVORITES_LIMIT, pinnedCount));
+}
+
+/** Kandidaten für den Angebots-Dialog: Favoriten, offene Artikel, bestehende Angebote. */
+function getOfferCandidates() {
+  const seen = new Set();
+  const list = [];
+  const push = (name, pinned = false) => {
+    const key = normalize(name);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    list.push({ key, name, pinned });
+  };
+  MAMA_FAVORITES.forEach((n) => push(n, true));
+  Object.values(state.offers).forEach((o) => { if (activeOffer(o.name)) push(o.name); });
+  state.items.filter((i) => !i.done).sort((a, b) => a.createdAt - b.createdAt).forEach((i) => push(i.name));
+  Object.values(readJSON(LS.freq, {}))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10)
+    .forEach((f) => push(f.name));
+  return list;
 }
 
 /* ================================================================
@@ -386,7 +512,15 @@ const els = {
   editCancel: $('#editCancel'),
   toast: $('#toast'),
   toastText: $('#toastText'),
-  toastAction: $('#toastAction')
+  toastAction: $('#toastAction'),
+  offerBtn: $('#offerManageBtn'),
+  offerDialog: $('#offerDialog'),
+  offerForm: $('#offerForm'),
+  offerRows: $('#offerRows'),
+  offerUntil: $('#offerUntil'),
+  offerNewName: $('#offerNewName'),
+  offerNewAdd: $('#offerNewAdd'),
+  offerCancel: $('#offerCancel')
 };
 
 function itemHtml(item) {
@@ -398,7 +532,10 @@ function itemHtml(item) {
   const badges = [];
   if (item.store === 'marktkauf') badges.push('<span class="badge badge--marktkauf">Marktkauf</span>');
   if (item.store === 'aldi') badges.push('<span class="badge badge--aldi">Aldi</span>');
-  if (item.isOffer) {
+  const offer = activeOffer(item.name);
+  if (offer) {
+    badges.push(`<span class="badge badge--offer badge--offer-${offer.store}">🏷️ Angebot ${escapeHtml(offerLabel(offer))}</span>`);
+  } else if (item.isOffer) {
     badges.push(`<span class="badge badge--offer">🏷️ Angebot${item.offerPrice ? ` ${escapeHtml(item.offerPrice)}` : ''}</span>`);
   }
   if (item.done) {
@@ -490,9 +627,19 @@ function render() {
 function renderFavorites() {
   const favs = getFavorites();
   els.favoritesWrap.hidden = favs.length === 0;
-  els.favorites.innerHTML = favs.map((f) => `
-    <button type="button" class="chip chip--fav" data-fav="${escapeHtml(f.name)}"
-            aria-label="${escapeHtml(f.name)} hinzufügen">${escapeHtml(f.name)}</button>`).join('');
+  els.favorites.innerHTML = favs.map((f) => {
+    const classes = ['chip', 'chip--fav'];
+    if (f.pinned) classes.push('chip--pinned');
+    if (f.offer) classes.push('chip--offer', `chip--offer-${f.offer.store}`);
+    const label = `${f.name} hinzufügen${f.offer ? `, im Angebot bei ${offerLabel(f.offer)}` : ''}`;
+    return `
+    <button type="button" class="${classes.join(' ')}" data-fav="${escapeHtml(f.name)}"
+            aria-label="${escapeHtml(label)}">
+      ${f.pinned ? '<span class="chip__star" aria-hidden="true">⭐</span>' : ''}
+      <span>${escapeHtml(f.name)}</span>
+      ${f.offer ? `<span class="chip__offer" aria-hidden="true">🏷️ ${escapeHtml(offerLabel(f.offer))}</span>` : ''}
+    </button>`;
+  }).join('');
 }
 
 function updateDocumentTitle(openCount) {
@@ -549,6 +696,16 @@ function handleItems(rawItems) {
   state.items = rawItems.map(sanitizeItem).filter((i) => i.id && i.name);
   writeJSON(LS.cache, state.items);
   render();
+}
+
+function handleOffers(offers) {
+  state.offers = offers || {};
+  writeJSON(LS.offersCache, state.offers);
+  render();
+  // Abgelaufene Angebote aufräumen
+  const now = Date.now();
+  const expired = Object.entries(state.offers).filter(([, o]) => o.until && o.until < now);
+  if (expired.length) backend.setOffers(Object.fromEntries(expired.map(([k]) => [k, null])));
 }
 
 function addFromText(text, store = state.addStore) {
@@ -608,6 +765,13 @@ function addFromText(text, store = state.addStore) {
     message = message ? `${message} · ${dupText}` : dupText;
   }
   if (hiddenByFilter) message += ' – sichtbar unter „Alle“';
+  const offerHits = toAdd.map((i) => [i, activeOffer(i.name)]).filter(([, o]) => o);
+  if (offerHits.length === 1) {
+    const [i, o] = offerHits[0];
+    message += ` · 🏷️ ${i.name} ist im Angebot bei ${offerLabel(o)}`;
+  } else if (offerHits.length > 1) {
+    message += ` · 🏷️ ${offerHits.length} davon im Angebot`;
+  }
   if (message) {
     const addedIds = toAdd.map((i) => i.id);
     showToast(message, addedIds.length ? {
@@ -716,6 +880,91 @@ function deleteFromEdit() {
   });
 }
 
+/* ---------- Angebote markieren ---------- */
+
+function formatPrice(raw) {
+  const p = String(raw || '').trim().slice(0, 20);
+  if (/^\d+([.,]\d{1,2})?$/.test(p)) {
+    const [euro, cent = ''] = p.replace('.', ',').split(',');
+    return `${euro},${cent.padEnd(2, '0')} €`;
+  }
+  return p;
+}
+
+function offerRowHtml(row) {
+  const draft = state.offerDraft[row.key] || { store: '', price: '' };
+  const seg = [['', 'Kein'], ['marktkauf', 'Marktkauf'], ['aldi', 'Aldi']].map(([store, label]) => `
+      <button type="button" class="chip chip--${store || 'none'}${draft.store === store ? ' is-active' : ''}"
+              role="radio" aria-checked="${draft.store === store}" data-offer-store="${store}">${label}</button>`).join('');
+  return `
+    <div class="offer-row${draft.store ? ' is-on' : ''}" data-key="${escapeHtml(row.key)}" data-name="${escapeHtml(row.name)}">
+      <div class="offer-row__name">${row.pinned ? '⭐ ' : ''}${escapeHtml(row.name)}</div>
+      <div class="chips chips--offer" role="radiogroup" aria-label="Angebot für ${escapeHtml(row.name)}">${seg}</div>
+      <input type="text" class="offer-row__price" inputmode="decimal" maxlength="20"
+             placeholder="Preis, z. B. 0,99 (optional)" value="${escapeHtml(draft.price)}"
+             aria-label="Angebotspreis für ${escapeHtml(row.name)}" ${draft.store ? '' : 'hidden'}>
+    </div>`;
+}
+
+function renderOfferRows() {
+  const rows = state.offerRows || [];
+  els.offerRows.innerHTML = rows.map(offerRowHtml).join('');
+}
+
+function openOffers() {
+  state.offerDraft = {};
+  for (const [key, offer] of Object.entries(state.offers)) {
+    if (activeOffer(offer.name)) state.offerDraft[key] = { store: offer.store, price: offer.price || '' };
+  }
+  state.offerRows = getOfferCandidates();
+  const until = new Date(offerWeekEnd());
+  els.offerUntil.textContent = until.toLocaleDateString('de-DE', { weekday: 'long', day: '2-digit', month: '2-digit' });
+  els.offerNewName.value = '';
+  renderOfferRows();
+  if (typeof els.offerDialog.showModal === 'function') els.offerDialog.showModal();
+  else els.offerDialog.setAttribute('open', '');
+}
+
+function closeOffers() {
+  if (els.offerDialog.open) els.offerDialog.close();
+}
+
+function addOfferRow() {
+  const parsed = parseItems(els.offerNewName.value)[0];
+  if (!parsed) return;
+  const key = normalize(parsed.name);
+  if (!state.offerRows.some((r) => r.key === key)) {
+    state.offerRows.unshift({ key, name: parsed.name, pinned: false });
+  }
+  state.offerDraft[key] = state.offerDraft[key] || { store: '', price: '' };
+  els.offerNewName.value = '';
+  renderOfferRows();
+  els.offerRows.querySelector(`[data-key="${CSS.escape(key)}"]`)?.scrollIntoView({ block: 'nearest' });
+}
+
+function saveOffers() {
+  const until = offerWeekEnd();
+  const changes = {};
+  let count = 0;
+  for (const row of state.offerRows || []) {
+    const draft = state.offerDraft[row.key] || { store: '', price: '' };
+    const current = activeOffer(row.name);
+    const price = formatPrice(draft.price);
+    if (!draft.store) {
+      if (state.offers[row.key]) changes[row.key] = null;
+      continue;
+    }
+    count += 1;
+    if (current && current.store === draft.store && (current.price || '') === price) continue;
+    changes[row.key] = { name: row.name, store: draft.store, price, until, updatedAt: Date.now() };
+  }
+  closeOffers();
+  if (!Object.keys(changes).length) return;
+  backend.setOffers(changes);
+  vibrate(15);
+  showToast(count ? `🏷️ ${count} Angebot${count === 1 ? '' : 'e'} markiert – gilt bis Samstag` : 'Angebote entfernt');
+}
+
 /* ---------- WhatsApp teilen ---------- */
 
 function buildShareText() {
@@ -735,7 +984,8 @@ function buildShareText() {
       if (!catItems.length) continue;
       lines.push(`${cat.icon} _${cat.name}_`);
       catItems.forEach((i) => {
-        const offer = i.isOffer ? ` 🏷️${i.offerPrice ? ` ${i.offerPrice}` : ''}` : '';
+        const o = activeOffer(i.name);
+        const offer = o ? ` 🏷️ Angebot ${offerLabel(o)}` : (i.isOffer ? ` 🏷️${i.offerPrice ? ` ${i.offerPrice}` : ''}` : '');
         lines.push(`• ${i.qty ? `${i.qty} ` : ''}${i.name}${offer}`);
       });
     }
@@ -906,6 +1156,39 @@ function bindEvents() {
   // Teilen
   els.share.addEventListener('click', shareViaWhatsApp);
 
+  // Angebote markieren
+  els.offerBtn.addEventListener('click', openOffers);
+  els.offerCancel.addEventListener('click', closeOffers);
+  els.offerForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    saveOffers();
+  });
+  els.offerNewAdd.addEventListener('click', addOfferRow);
+  els.offerNewName.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addOfferRow();
+    }
+  });
+  els.offerRows.addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-offer-store]');
+    const row = e.target.closest('.offer-row');
+    if (!chip || !row) return;
+    const draft = state.offerDraft[row.dataset.key] || { store: '', price: '' };
+    draft.store = chip.dataset.offerStore;
+    state.offerDraft[row.dataset.key] = draft;
+    renderOfferRows();
+    if (draft.store) els.offerRows.querySelector(`[data-key="${CSS.escape(row.dataset.key)}"] .offer-row__price`)?.focus();
+  });
+  els.offerRows.addEventListener('input', (e) => {
+    if (!e.target.classList.contains('offer-row__price')) return;
+    const key = e.target.closest('.offer-row').dataset.key;
+    state.offerDraft[key] = { ...(state.offerDraft[key] || { store: '' }), price: e.target.value };
+  });
+  els.offerDialog.addEventListener('click', (e) => {
+    if (e.target === els.offerDialog) closeOffers();
+  });
+
   // Bearbeiten-Dialog
   els.editStore.addEventListener('click', (e) => {
     const chip = e.target.closest('[data-store]');
@@ -961,6 +1244,7 @@ function init() {
     els.modeInfo.textContent = 'Demo-Modus: Firebase ist noch nicht eingerichtet (siehe README.md). Die Liste wird nur auf diesem Gerät gespeichert.';
   }
 
+  backend.startOffers(handleOffers);
   backend.start(handleItems, setStatus);
 }
 

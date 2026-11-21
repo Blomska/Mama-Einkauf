@@ -79,6 +79,9 @@
             <span>Aldi Nord<br><small>Prospekt ansehen</small></span>
           </a>
         </div>
+        <button type="button" class="offer-manage" id="offerManageBtn">
+          🏷️ Angebote markieren <small>(gilt für die ganze Familie)</small>
+        </button>
       </section>
 
       <!-- Laden-Filter -->
@@ -160,6 +163,31 @@
         <button type="button" class="btn btn--ghost-danger" id="editDelete">🗑️ Löschen</button>
         <button type="button" class="btn btn--ghost" id="editCancel">Abbrechen</button>
         <button type="submit" class="btn btn--primary" id="editSave" value="save">Speichern</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Angebote-Dialog -->
+  <dialog id="offerDialog" class="sheet" aria-labelledby="offerTitle">
+    <form id="offerForm" class="sheet__inner">
+      <div class="sheet__handle" aria-hidden="true"></div>
+      <h2 id="offerTitle">🏷️ Angebote dieser Woche</h2>
+      <p class="sheet__hint">
+        Im Prospekt gesehen? Laden antippen, Preis optional eintragen.
+        Gilt automatisch bis <strong id="offerUntil">Samstag</strong> und erscheint bei allen auf der Liste.
+      </p>
+
+      <div class="offer-new">
+        <input type="text" id="offerNewName" maxlength="80" placeholder="Anderer Artikel …" autocomplete="off"
+               aria-label="Weiteren Artikel für Angebot hinzufügen">
+        <button type="button" class="btn btn--ghost" id="offerNewAdd">＋</button>
+      </div>
+
+      <div id="offerRows" class="offer-rows"></div>
+
+      <div class="sheet__actions sheet__actions--sticky">
+        <button type="button" class="btn btn--ghost" id="offerCancel">Abbrechen</button>
+        <button type="submit" class="btn btn--primary">Speichern</button>
       </div>
     </form>
   </dialog>

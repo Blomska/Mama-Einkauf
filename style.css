@@ -267,6 +267,78 @@ main { padding: 0 16px; }
 .chip--fav { background: #F1F5F9; border-color: transparent; font-weight: 500; }
 .chip--fav::before { content: "+"; font-weight: 800; color: var(--primary); font-size: 20px; line-height: 1; }
 .chip--fav:hover { background: var(--primary-soft); }
+.chip--pinned { background: #FFFBEB; border-color: #FDE68A; font-weight: 700; }
+.chip--pinned::before { content: none; }
+.chip__star { font-size: 16px; }
+.chip--offer { border-color: var(--aldi-orange); background: #FFF7ED; font-weight: 700; }
+.chip--offer.chip--offer-marktkauf { border-color: var(--mk-blue); background: var(--mk-soft); }
+.chip__offer {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--aldi-orange);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.chip--offer-marktkauf .chip__offer { background: var(--mk-blue); color: var(--mk-yellow); }
+
+/* Angebots-Button & -Dialog */
+.offer-manage {
+  display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: wrap;
+  width: 100%;
+  min-height: 48px;
+  margin-top: 10px;
+  padding: 6px 12px;
+  border: 2px dashed #FDBA74;
+  border-radius: var(--radius-sm);
+  background: #FFF7ED;
+  color: #9A3412;
+  font-size: 16px;
+  font-weight: 700;
+}
+.offer-manage small { font-weight: 500; color: #C2410C; }
+
+.sheet__hint { margin: -6px 0 14px; font-size: 15px; color: var(--text-soft); }
+.offer-new { display: flex; gap: 8px; margin-bottom: 12px; }
+.offer-new input {
+  flex: 1; min-width: 0;
+  min-height: 52px;
+  padding: 0 14px;
+  border: 2px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  font-size: 17px;
+}
+.offer-new .btn { width: 56px; padding: 0; font-size: 24px; }
+.offer-rows { display: flex; flex-direction: column; gap: 10px; }
+.offer-row {
+  padding: 12px;
+  border: 2px solid var(--line);
+  border-radius: var(--radius-sm);
+  transition: border-color .15s, background .15s;
+}
+.offer-row.is-on { border-color: #FDBA74; background: #FFFBF5; }
+.offer-row__name { margin-bottom: 8px; font-size: 18px; font-weight: 700; }
+.chips--offer { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.chips--offer .chip { min-height: 44px; padding: 0 4px; font-size: 15px; white-space: nowrap; }
+.chip--none.is-active { background: #E2E8F0; border-color: #CBD5E1; }
+.offer-row__price {
+  width: 100%;
+  min-height: 48px;
+  margin-top: 8px;
+  padding: 0 12px;
+  border: 2px solid var(--line-strong);
+  border-radius: 10px;
+  font-size: 17px;
+}
+.sheet__actions--sticky {
+  position: sticky;
+  bottom: 0;
+  margin: 16px -18px 0;
+  padding: 12px 18px calc(4px + var(--safe-bottom));
+  background: var(--card);
+  border-top: 1px solid var(--line);
+}
 
 /* ---------- Prospekte ---------- */
 .offers { margin: 22px 2px 0; }
@@ -439,6 +511,8 @@ main { padding: 0 16px; }
 .badge--marktkauf { background: var(--mk-soft); color: var(--mk-blue); box-shadow: inset 3px 0 0 var(--mk-yellow); }
 .badge--aldi { background: var(--aldi-soft); color: var(--aldi-blue); box-shadow: inset 3px 0 0 var(--aldi-orange); }
 .badge--offer { background: #FEF3C7; color: #92400E; }
+.badge--offer-aldi { background: var(--aldi-orange); color: #fff; }
+.badge--offer-marktkauf { background: var(--mk-blue); color: var(--mk-yellow); }
 
 .item__edit {
   flex-shrink: 0;
