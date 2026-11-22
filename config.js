@@ -50,7 +50,7 @@ export const GREETING_NAME = 'Mama';
  * Leer lassen, solange der Helfer nicht eingerichtet ist.
  * Beispiel: 'https://mama-einkauf-helfer.DEIN-NAME.workers.dev'
  */
-export const CHAT_URL = '';
+export const CHAT_URL = 'https://mama-einkauf-helfer.blomenkemper-kai.workers.dev';
 
 /** Prospekt-Links (öffnen in neuem Tab). */
 export const OFFER_LINKS = {
