@@ -13,7 +13,7 @@
  * ------------------------------------------------------------------
  */
 
-const CACHE_VERSION = 'v9';
+const CACHE_VERSION = 'v10';
 const APP_CACHE = `einkauf-app-${CACHE_VERSION}`;
 const CDN_CACHE = 'einkauf-cdn-v1';
 
@@ -24,6 +24,7 @@ const APP_SHELL = [
   './app.js',
   './categories.js',
   './config.js',
+  './wissen.js',
   './manifest.json',
   './icons/icon.svg',
   './icons/icon-192.png',

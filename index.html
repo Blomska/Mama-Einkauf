@@ -172,6 +172,16 @@
             <p class="view__sub">Frag einfach – z. B. was du für ein Frühstück mit Besuch brauchst.</p>
           </div>
         </div>
+        <details class="memory" id="memory">
+          <summary>🧠 Das weiß ich über euch <span class="memory__count" id="memoryCount">0</span></summary>
+          <p class="memory__hint">Das berücksichtige ich beim Helfen und bei den Rezepten der Woche. Sag mir im Chat einfach, was ich mir merken soll – oder trag es hier ein.</p>
+          <ul class="memory__list" id="memoryList"></ul>
+          <form class="memory__form" id="memoryForm" autocomplete="off">
+            <input type="text" id="memoryInput" maxlength="240" placeholder="z. B. Papa mag keine Rosinen" aria-label="Etwas Neues merken">
+            <button type="submit" class="btn btn--primary">Merken</button>
+          </form>
+          <p class="memory__note" id="memoryNote" hidden>Gerade nur auf diesem Handy gespeichert – für die ganze Familie fehlt noch eine Firebase-Regel (siehe README).</p>
+        </details>
         <div class="chat__log" id="chatLog" aria-live="polite"></div>
         <div class="chat__ideas" id="chatIdeas">
           <button type="button" class="idea" data-idea="Ich habe Dienstag 4 Leute zum Frühstück. Was brauche ich?">🥐 Frühstück für 4</button>

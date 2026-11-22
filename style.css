@@ -1198,3 +1198,33 @@ h1, h2, h3, .btn, .chip, .tab { font-family: var(--font); }
 .recipe__save { padding: 0 16px 12px; }
 .recipe__saved { display: inline-block; padding: 6px 12px; border-radius: 99px; background: #FFF4D6; color: #8A5A00; font-weight: 800; }
 .recipe__delete { margin-top: 12px; width: 100%; }
+
+/* Familien-Gedächtnis */
+.memory { margin-top: 14px; border-radius: 18px; background: #fff; box-shadow: var(--shadow); overflow: hidden; }
+.memory summary {
+  display: flex; align-items: center; gap: 8px;
+  min-height: 56px; padding: 0 16px;
+  font-size: 17px; font-weight: 800; color: var(--text);
+  cursor: pointer; list-style: none;
+}
+.memory summary::-webkit-details-marker { display: none; }
+.memory summary::after { content: "▾"; margin-left: auto; color: var(--text-faint); transition: transform .2s; }
+.memory[open] summary::after { transform: rotate(180deg); }
+.memory__count { padding: 1px 9px; border-radius: 99px; background: var(--primary-soft); color: var(--primary-dark); font-size: 14px; }
+.memory__hint { margin: 0 16px 8px; font-size: 15px; color: var(--text-faint); }
+.memory__list { margin: 0; padding: 0 8px; list-style: none; }
+.memory__item { display: flex; align-items: center; gap: 8px; padding: 10px 8px; border-top: 1px dashed var(--line); font-size: 16px; }
+.memory__item small { color: var(--primary-dark); font-weight: 700; }
+.memory__item > span { flex: 1; }
+.memory__del { flex-shrink: 0; width: 44px; height: 44px; border: 0; border-radius: 12px; background: transparent; font-size: 18px; }
+.memory__empty { padding: 10px 8px; color: var(--text-faint); }
+.memory__form { display: flex; gap: 8px; padding: 10px 16px 14px; }
+.memory__form input { flex: 1; min-width: 0; min-height: 48px; padding: 0 12px; border: 2px solid var(--line-strong); border-radius: 12px; font-size: 16px; }
+.memory__form .btn { min-height: 48px; padding: 0 16px; }
+.memory__note { margin: 0 16px 14px; font-size: 13px; color: #A4462A; }
+.memory-suggest { align-self: stretch; padding: 12px; border: 2px dashed #F5C9B5; border-radius: 18px; background: #FFF8F3; }
+.memory-suggest h4 { margin: 0 0 6px; font-size: 15px; color: #A4462A; }
+.memory-suggest__row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+.memory-suggest__row > span:first-child { flex: 1; }
+.memory-suggest__row .btn { min-height: 44px; padding: 0 14px; font-size: 15px; }
+.memory-suggest__done { color: var(--primary-dark); font-weight: 800; }

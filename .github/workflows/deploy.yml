@@ -73,7 +73,7 @@ jobs:
       - name: Webseite zusammenstellen
         run: |
           mkdir -p _site
-          cp -r index.html style.css app.js categories.js config.js manifest.json sw.js .nojekyll icons data _site/
+          cp -r index.html style.css app.js categories.js config.js wissen.js manifest.json sw.js .nojekyll icons data _site/
 
       - name: Pages konfigurieren
         uses: actions/configure-pages@v5

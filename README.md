@@ -14,6 +14,7 @@ Ohne Login, mit Echtzeit-Abgleich für die ganze Familie, installierbar als App 
 - **Prospekte direkt in der App:** Der Aldi-Prospekt lässt sich Seite für Seite durchblättern, für diese und die nächste Woche. Dazu kommen alle Aldi-Angebote als durchsuchbare Liste mit Bild und Preis, ein Tipp auf ＋ setzt ein Angebot auf die Liste. Für Marktkauf Nientied gibt es Titelbild, Gültigkeit und den Blätterkatalog.
 - **Automatische Angebots-Erkennung:** Steht z. B. Avocado im Aldi-Angebot, bekommen der Favorit „Avocados“ und der Listeneintrag automatisch ein 🏷️-Schild mit Preis.
 - **Spracheingabe (🎤)** und **Vorschläge beim Tippen**.
+- **Familien-Gedächtnis (🧠):** Vorlieben wie „Milch immer 1,5 %“ oder „viel Hähnchen“ merkt sich die App. Startwissen steht in `wissen.js`, Neues lernt der Küchenhelfer im Chat („Soll ich mir das merken?“). Ersetzungen gelten sofort beim Eintragen („Milch“ → „Milch 1,5 %“). Helfer und Wochenrezepte berücksichtigen das Gedächtnis.
 - **Display anlassen** (Screen Wake Lock) und **WhatsApp-Teilen**.
 - **Offline-fähig:** Was im Funkloch abgehakt wird, gleicht sich später automatisch ab.
 
@@ -64,6 +65,12 @@ service cloud.firestore {
       allow read, delete: if request.auth != null;
       allow create, update: if request.auth != null
         && request.resource.data.store in ['marktkauf', 'aldi'];
+    }
+    match /lists/{listId}/wissen/{entryId} {
+      allow read, delete: if request.auth != null;
+      allow create, update: if request.auth != null
+        && (entryId == '_start' || (request.resource.data.text is string
+            && request.resource.data.text.size() <= 240));
     }
   }
 }

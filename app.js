@@ -38,6 +38,7 @@ import {
   firebaseConfig, LIST_ID, USE_ANONYMOUS_AUTH, OFFER_LINKS, MAMA_FAVORITES, GREETING_NAME, CHAT_URL,
   isFirebaseConfigured
 } from './config.js';
+import { START_WISSEN } from './wissen.js';
 
 /* ================================================================
  * 1. Konstanten & Hilfsfunktionen
@@ -128,6 +129,34 @@ function sanitizeItem(raw) {
  *    remove(ids), restore(items)
  * ================================================================ */
 
+/** Familien-Gedächtnis lokal auf dem Gerät (Demo-Modus oder wenn die Firebase-Regel fehlt). */
+class LocalWissenStore {
+  constructor() {
+    this.key = `einkauf:wissen:${LIST_ID}`;
+    this.map = readJSON(this.key, {});
+  }
+
+  start(onWissen) {
+    this.onWissen = onWissen;
+    window.addEventListener('storage', (e) => {
+      if (e.key === this.key) {
+        this.map = readJSON(this.key, {});
+        onWissen({ ...this.map }, { fromServer: true, local: true });
+      }
+    });
+    onWissen({ ...this.map }, { fromServer: true, local: true });
+  }
+
+  set(changes) {
+    for (const [id, entry] of Object.entries(changes)) {
+      if (entry) this.map[id] = entry;
+      else delete this.map[id];
+    }
+    writeJSON(this.key, this.map);
+    this.onWissen?.({ ...this.map }, { fromServer: true, local: true });
+  }
+}
+
 /** Demo-Modus: speichert lokal (synchronisiert zwischen Tabs desselben Browsers). */
 class LocalBackend {
   constructor() {
@@ -193,6 +222,15 @@ class LocalBackend {
     writeJSON(LS.demoOffers, this.offers);
     this.onOffers?.({ ...this.offers });
   }
+
+  startWissen(onWissen) {
+    this.wissen = new LocalWissenStore();
+    this.wissen.start(onWissen);
+  }
+
+  setWissen(changes) {
+    this.wissen.set(changes);
+  }
 }
 
 /** Firebase Firestore mit Echtzeit-Sync & Offline-Cache. */
@@ -232,6 +270,7 @@ class FirebaseBackend {
     }
     this.col = fs.collection(this.db, 'lists', LIST_ID, 'items');
     this.offersCol = fs.collection(this.db, 'lists', LIST_ID, 'offers');
+    this.wissenCol = fs.collection(this.db, 'lists', LIST_ID, 'wissen');
 
     if (authMod) {
       const auth = authMod.getAuth(app);
@@ -251,7 +290,7 @@ class FirebaseBackend {
       window.addEventListener('online', signIn);
       // Nach (Neu-)Anmeldung Listener neu aufbauen, falls er vorher abgelehnt wurde
       authMod.onAuthStateChanged(auth, (user) => {
-        if (user && (this.listenerFailed || this.offersFailed)) this.subscribe();
+        if (user && (this.listenerFailed || this.offersFailed || this.wissenFailed)) this.subscribe();
       });
     }
 
@@ -295,6 +334,57 @@ class FirebaseBackend {
         this.offersFailed = true;
       }
     );
+
+    // Familien-Gedächtnis. Fehlt die Firebase-Regel, wird auf dem Gerät gespeichert.
+    if (this.wissenLocal) return;
+    this.wissenFailed = false;
+    this.unsubscribeWissen?.();
+    this.unsubscribeWissen = fs.onSnapshot(
+      this.wissenCol,
+      (snap) => {
+        const map = {};
+        snap.docs.forEach((d) => { map[d.id] = d.data(); });
+        this.onWissen?.(map, { fromServer: !snap.metadata.fromCache });
+      },
+      (err) => {
+        console.warn('[Firebase] Gedächtnis nicht lesbar:', err.code || err);
+        this.wissenFailed = true;
+        if (err.code === 'permission-denied') this.useLocalWissen();
+      }
+    );
+  }
+
+  useLocalWissen() {
+    if (this.wissenLocal) return;
+    this.wissenLocal = new LocalWissenStore();
+    this.wissenLocal.start((map, meta) => this.onWissen?.(map, meta));
+  }
+
+  startWissen(onWissen) {
+    this.onWissen = onWissen;
+  }
+
+  async setWissen(changes) {
+    if (this.wissenLocal) {
+      this.wissenLocal.set(changes);
+      return;
+    }
+    await this.ready;
+    const batch = this.fs.writeBatch(this.db);
+    for (const [id, entry] of Object.entries(changes)) {
+      const ref = this.fs.doc(this.wissenCol, id);
+      if (entry) batch.set(ref, entry);
+      else batch.delete(ref);
+    }
+    batch.commit().catch((err) => {
+      console.error('[Firebase] Gedächtnis speichern fehlgeschlagen:', err);
+      if (err.code === 'permission-denied') {
+        this.useLocalWissen();
+        this.wissenLocal.set(changes);
+      } else {
+        showToast('Konnte ich mir gerade nicht merken – bitte nochmal versuchen.');
+      }
+    });
   }
 
   startOffers(onOffers) {
@@ -373,7 +463,9 @@ const state = {
   prospekte: null,     // data/prospekte.json (automatisch abgerufen)
   rezepte: null,       // data/rezepte.json (KI-Rezepte der Woche)
   openRecipes: new Set(),
-  view: 'liste'
+  view: 'liste',
+  wissen: readJSON(`einkauf:wissen-cache:${LIST_ID}`, null) || START_WISSEN,
+  wissenLocal: false
 };
 
 const backend = isFirebaseConfigured() ? new FirebaseBackend() : new LocalBackend();
@@ -474,9 +566,13 @@ function autoOffer(name) {
   let best = null;
   let bestScore = 0;
   let bestStore = null;
+  // Auch den ursprünglichen Namen prüfen, wenn das Gedächtnis ersetzt hat ("Skyr Natur" ← "Skyr")
+  const names = [name, ...(state.wissen || [])
+    .filter((w) => w.wenn && w.dann && normalize(w.dann) === key)
+    .map((w) => w.wenn)];
   for (const store of ['aldi', 'marktkauf']) {
     for (const o of storeOffers(store)) {
-      const score = offerMatchScore(name, o.name);
+      const score = Math.max(...names.map((n) => offerMatchScore(n, o.name)));
       if (!score) continue;
       if (score > bestScore || (score === bestScore && priceValue(o.price) < priceValue(best.price))) {
         best = o;
@@ -528,7 +624,8 @@ function getFavorites() {
   const openNames = new Set(state.items.filter((i) => !i.done).map((i) => normalize(i.name)));
   const seen = new Set();
   const list = [];
-  const push = (name, pinned) => {
+  const push = (rawName, pinned) => {
+    const name = applyWissen(rawName);
     const key = normalize(name);
     if (!key || seen.has(key)) return;
     seen.add(key);
@@ -834,6 +931,8 @@ function addFromText(text, store = state.addStore) {
 /** Fügt bereits zerlegte Artikel [{ name, qty }] hinzu. */
 function addParsed(parsed, store = state.addStore) {
   if (!parsed.length) return false;
+  // Familien-Gedächtnis: z. B. "Milch" → "Milch 1,5 %"
+  parsed = parsed.map((p) => ({ ...p, name: applyWissen(p.name) }));
 
   const openByName = new Map(state.items.filter((i) => !i.done).map((i) => [normalize(i.name), i]));
   const toAdd = [];
@@ -1765,6 +1864,79 @@ function handleRecipeClick(e, container) {
   return false;
 }
 
+/* ---------- Familien-Gedächtnis ---------- */
+
+const WISSEN_CACHE = `einkauf:wissen-cache:${LIST_ID}`;
+
+function startWissenEntries() {
+  return START_WISSEN.map((w, i) => ({ ...w, createdAt: i }));
+}
+
+function handleWissen(map, meta = {}) {
+  // Startwissen einmalig ins gemeinsame Gedächtnis übernehmen
+  // (nur nach echter Server-Antwort, damit Gelöschtes nicht zurückkommt)
+  if (!map._start && meta.fromServer) {
+    const seed = { _start: { seeded: true, at: Date.now() } };
+    startWissenEntries().forEach(({ id, ...entry }) => { seed[id] = entry; });
+    backend.setWissen(seed);
+  }
+  const entries = Object.entries(map)
+    .filter(([id]) => id !== '_start')
+    .map(([id, w]) => ({ id, ...w }))
+    .filter((w) => w.text)
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  state.wissen = map._start || entries.length ? entries : startWissenEntries();
+  state.wissenLocal = Boolean(meta.local) && isFirebaseConfigured();
+  writeJSON(WISSEN_CACHE, state.wissen);
+  vocabulary = null;
+  autoOfferCache.clear();
+  renderWissen();
+  if (state.view === 'liste') renderFavorites();
+}
+
+/** "Milch" → "Milch 1,5 %" usw. (nur bei genau passendem Namen) */
+function applyWissen(name) {
+  const key = normalize(name);
+  const rule = (state.wissen || []).find((w) => w.wenn && w.dann && normalize(w.wenn) === key);
+  return rule ? rule.dann : name;
+}
+
+function addWissen({ text, wenn = '', dann = '' }) {
+  const clean = String(text || '').trim().slice(0, 240);
+  if (!clean) return;
+  if ((state.wissen || []).some((w) => normalize(w.text) === normalize(clean))) {
+    showToast('Das weiß ich schon 😊');
+    return;
+  }
+  const entry = { text: clean, createdAt: Date.now() };
+  if (wenn.trim() && dann.trim()) {
+    entry.wenn = wenn.trim().slice(0, 60);
+    entry.dann = dann.trim().slice(0, 80);
+  }
+  backend.setWissen({ [makeId()]: entry });
+  showToast('🧠 Gemerkt!');
+  vibrate(15);
+}
+
+function removeWissen(id) {
+  const entry = (state.wissen || []).find((w) => w.id === id);
+  if (!entry) return;
+  backend.setWissen({ [id]: null });
+  const { id: _, ...data } = entry;
+  showToast('Vergessen', { label: 'Rückgängig', onClick: () => backend.setWissen({ [id]: data }) });
+}
+
+function renderWissen() {
+  const list = state.wissen || [];
+  $('#memoryCount').textContent = list.length;
+  $('#memoryList').innerHTML = list.map((w) => `
+    <li class="memory__item">
+      <span>${escapeHtml(w.text)}${w.wenn && w.dann ? `<br><small>„${escapeHtml(w.wenn)}“ wird automatisch zu „${escapeHtml(w.dann)}“</small>` : ''}</span>
+      <button type="button" class="memory__del" data-wissen-del="${escapeHtml(w.id)}" aria-label="Vergessen: ${escapeHtml(w.text)}">🗑️</button>
+    </li>`).join('') || '<li class="memory__empty">Noch nichts gemerkt.</li>';
+  $('#memoryNote').hidden = !state.wissenLocal;
+}
+
 /* ---------- Küchenhelfer (Chat) ---------- */
 
 const CHAT_LS = 'einkauf:chat';
@@ -1819,6 +1991,23 @@ function renderChat() {
     if (m.role === 'user') return `<div class="bubble bubble--me">${escapeHtml(m.content)}</div>`;
     let html = `<div class="bubble bubble--bot${m.error ? ' bubble--error' : ''}">${formatBotText(m.content)}</div>`;
     (m.rezepte || []).forEach((r, ri) => { html += recipeCardHtml(r, `c-${mi}-${ri}`, { inChat: true }); });
+    if (m.merken?.length) {
+      const known = new Set((state.wissen || []).map((w) => normalize(w.text)));
+      html += `
+        <div class="memory-suggest">
+          <h4>🧠 Soll ich mir das merken?</h4>
+          ${m.merken.map((x, xi) => {
+            const done = (m.gemerkt || []).includes(xi) || known.has(normalize(x.text));
+            return `
+            <div class="memory-suggest__row">
+              <span>${escapeHtml(x.text)}</span>
+              ${done
+                ? '<span class="memory-suggest__done">✓ gemerkt</span>'
+                : `<button type="button" class="btn btn--primary" data-merken="${mi}-${xi}">Merken</button>`}
+            </div>`;
+          }).join('')}
+        </div>`;
+    }
     if (m.artikel?.length) {
       html += `
         <div class="suggestion">
@@ -1865,7 +2054,7 @@ async function sendChat(text) {
     const res = await fetch(`${CHAT_URL.replace(/\/$/, '')}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Familien-Code': readJSON(CODE_LS, '') },
-      body: JSON.stringify({ messages: history, liste })
+      body: JSON.stringify({ messages: history, liste, wissen: (state.wissen || []).map((w) => w.text) })
     });
     const data = await res.json().catch(() => ({}));
     if (res.status === 401) {
@@ -1879,7 +2068,8 @@ async function sendChat(text) {
         role: 'assistant',
         content: data.antwort || '',
         artikel: Array.isArray(data.artikel) ? data.artikel : [],
-        rezepte: Array.isArray(data.rezepte) ? data.rezepte.filter((r) => r && r.titel && Array.isArray(r.zutaten)) : []
+        rezepte: Array.isArray(data.rezepte) ? data.rezepte.filter((r) => r && r.titel && Array.isArray(r.zutaten)) : [],
+        merken: Array.isArray(data.merken) ? data.merken.filter((x) => x && x.text) : []
       });
     }
   } catch {
@@ -2139,6 +2329,19 @@ function bindEvents() {
   });
   els.chatLog.addEventListener('click', (e) => {
     if (handleRecipeClick(e, els.chatLog)) return;
+    const merk = e.target.closest('[data-merken]');
+    if (merk) {
+      const [mi, xi] = merk.dataset.merken.split('-').map(Number);
+      const msg = chat.messages[mi];
+      const item = msg?.merken?.[xi];
+      if (item) {
+        addWissen(item);
+        msg.gemerkt = [...(msg.gemerkt || []), xi];
+        saveChat();
+        renderChat();
+      }
+      return;
+    }
     const add = e.target.closest('[data-chat-add]');
     if (add) addChatSuggestion(Number(add.dataset.chatAdd));
     if (e.target.closest('#chatReset')) {
@@ -2155,6 +2358,18 @@ function bindEvents() {
     chat.needsCode = false;
     renderChat();
     showToast('Gespeichert – jetzt kannst du loslegen! 😊');
+  });
+
+  // Familien-Gedächtnis
+  $('#memoryList').addEventListener('click', (e) => {
+    const del = e.target.closest('[data-wissen-del]');
+    if (del) removeWissen(del.dataset.wissenDel);
+  });
+  $('#memoryForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const input = $('#memoryInput');
+    addWissen({ text: input.value });
+    input.value = '';
   });
 
   // Prospekte & Angebote
@@ -2288,6 +2503,8 @@ function init() {
   }
 
   backend.startOffers(handleOffers);
+  renderWissen();
+  backend.startWissen(handleWissen);
   backend.start(handleItems, setStatus);
 }
 

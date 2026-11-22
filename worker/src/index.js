@@ -46,7 +46,12 @@ const ReplySchema = z.object({
     menge: z.string(),
     laden: z.enum(['aldi', 'marktkauf', 'egal'])
   })),
-  rezepte: z.array(RecipeSchema)
+  rezepte: z.array(RecipeSchema),
+  merken: z.array(z.object({
+    text: z.string(),
+    wenn: z.string(),
+    dann: z.string()
+  }))
 });
 
 const SYSTEM_PROMPT = `Du bist der freundliche Einkaufs- und Küchenhelfer in der Einkaufslisten-App einer Familie aus Lüdinghausen (Münsterland). Meistens schreibt dir die Mutter der Familie. Sie kauft bei Marktkauf (Nientied) und Aldi Nord ein.
@@ -68,6 +73,12 @@ Wie du antwortest:
   • "schritte": 4–8 kurze, klare Schritte. "emoji": ein passendes Essens-Emoji.
   • In "antwort" dann nur kurz beschreiben, was es gibt – nicht die ganze Zubereitung wiederholen. Die App zeigt das Rezept als Karte an, die sie mit „⭐ In meine Rezepte“ speichern kann.
 - Ohne konkretes Rezept bleibt "rezepte" leer.
+- Familien-Gedächtnis: Am Anfang ihrer Nachricht steht, was du schon über die Familie weißt. Richte dich immer danach (Personenzahl, Vorlieben, Lieblingssorten) – auch bei Mengen in "artikel" und "rezepte".
+- Sagt sie etwas Dauerhaftes, das du dir merken solltest (Vorliebe, Abneigung, Lieblingssorte/-marke, Personenzahl, Allergie, Gewohnheit), und steht es noch nicht im Gedächtnis, schlage es in "merken" vor:
+  • "text": kurz in der 3. Person, z. B. "Papa mag keine Rosinen." oder "Joghurt immer von Ehrmann."
+  • "wenn"/"dann" nur, wenn ein Artikelname auf der Einkaufsliste immer ersetzt werden soll, z. B. wenn "Joghurt", dann "Ehrmann Joghurt". Sonst beide leer.
+  • Frag in "antwort" kurz: "Soll ich mir das merken?" – die App zeigt dafür einen Knopf.
+  • Ohne neue dauerhafte Info bleibt "merken" leer. Schlage nie etwas vor, das schon im Gedächtnis steht.
 - Bleib beim Thema Essen, Einkaufen, Haushalt und Planung. Bei anderem antworte freundlich und kurz.`;
 
 /* ---------------- Hilfsfunktionen ---------------- */
@@ -179,6 +190,7 @@ export default {
     if (!messages) return json({ fehler: 'Ungültige Nachrichten' }, 400, cors);
 
     const list = Array.isArray(body?.liste) ? body.liste.filter((s) => typeof s === 'string').slice(0, 150).map((s) => s.slice(0, 80)) : [];
+    const wissen = Array.isArray(body?.wissen) ? body.wissen.filter((s) => typeof s === 'string').slice(0, 60).map((s) => s.slice(0, 240)) : [];
     const today = new Date().toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Berlin' });
 
     // Gemini-Format: Rollen "user" / "model". Der aktuelle Stand (Datum, Liste)
@@ -186,7 +198,7 @@ export default {
     const contents = messages.map((m, i) => {
       const isLast = i === messages.length - 1;
       const text = isLast
-        ? `[Heute ist ${today}. Auf der Einkaufsliste steht schon: ${list.length ? list.join(', ') : 'noch nichts'}.]\n\n${m.content}`
+        ? `[Heute ist ${today}.\nDas weißt du über die Familie:\n${wissen.length ? wissen.map((w) => `- ${w}`).join('\n') : '- noch nichts'}\nAuf der Einkaufsliste steht schon: ${list.length ? list.join(', ') : 'noch nichts'}.]\n\n${m.content}`
         : m.content;
       return { role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text }] };
     });
@@ -202,7 +214,7 @@ export default {
         retryDelayMs: 1500,
         maxModels: 3
       });
-      return json({ antwort: out.antwort, artikel: out.artikel.slice(0, 40), rezepte: out.rezepte.slice(0, 2) }, 200, cors);
+      return json({ antwort: out.antwort, artikel: out.artikel.slice(0, 40), rezepte: out.rezepte.slice(0, 2), merken: out.merken.slice(0, 5) }, 200, cors);
     } catch (err) {
       if (err instanceof GeminiBlocked) {
         return json({ antwort: 'Dabei kann ich leider nicht helfen. Frag mich gern etwas anderes rund ums Einkaufen und Kochen! 😊', artikel: [] }, 200, cors);

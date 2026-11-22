@@ -26,6 +26,8 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as z from 'zod';
 import { createClient, generateJson, isQuota } from '../lib/gemini.mjs';
+import { firebaseConfig, LIST_ID, MAMA_FAVORITES } from '../config.js';
+import { START_WISSEN } from '../wissen.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DATA_FILE = resolve(ROOT, 'data/prospekte.json');
@@ -38,8 +40,6 @@ const PAGES_PER_REQUEST = 6;
 const PAUSE_MS = 8000; // Pause zwischen Anfragen – schont das kostenlose Kontingent
 const EXTRACT_BUDGET_MS = 6 * 60 * 1000; // höchstens 6 Minuten für die Prospekt-Auswertung
 
-// Mamas feste Favoriten (wie in config.js) – fließen in die Rezeptauswahl ein
-const MAMA_FAVORITES = ['Skyr', 'Eier', 'Milch', 'Rinderhack', 'Avocados'];
 
 const CATEGORY_NAMES = [
   'Obst & Gemüse', 'Backwaren', 'Fleisch & Wurst', 'Kühlregal & Molkerei', 'Trockensortiment & Vorräte',
@@ -100,6 +100,40 @@ async function ask(ai, { system, parts, schema, maxTokens = 32768 }) {
     model: MODEL,
     maxModels: 7 // kostenloses Kontingent gilt je Modell – mehrere durchprobieren
   });
+}
+
+/* ---------------- Familien-Gedächtnis lesen ---------------- */
+
+/**
+ * Liest das gemeinsame Gedächtnis aus Firebase (lists/{LIST_ID}/wissen) –
+ * mit einer anonymen Anmeldung, genau wie die App. Klappt das nicht,
+ * wird das Startwissen aus wissen.js verwendet.
+ */
+async function loadWissen() {
+  const fallback = START_WISSEN.map((w) => w.text);
+  try {
+    const signUp = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${firebaseConfig.apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ returnSecureToken: true })
+    });
+    if (!signUp.ok) throw new Error(`Anmeldung HTTP ${signUp.status}`);
+    const { idToken } = await signUp.json();
+    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/(default)/documents/lists/${encodeURIComponent(LIST_ID)}/wissen?pageSize=200`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${idToken}` } });
+    if (!res.ok) throw new Error(`Lesen HTTP ${res.status}`);
+    const json = await res.json();
+    const texts = (json.documents || [])
+      .filter((d) => !d.name.endsWith('/_start'))
+      .map((d) => d.fields?.text?.stringValue)
+      .filter(Boolean);
+    if (!texts.length) return fallback;
+    console.log(`  Familien-Gedächtnis: ${texts.length} Einträge aus Firebase`);
+    return texts;
+  } catch (err) {
+    console.log(`  Familien-Gedächtnis aus Firebase nicht lesbar (${err.message}) – nutze Startwissen`);
+    return fallback;
+  }
 }
 
 /* ---------------- 1. Marktkauf-Prospekt lesen ---------------- */
@@ -228,13 +262,13 @@ Zutaten:
 - "laden": "aldi" oder "marktkauf", wenn die Zutat dort im Angebot ist, sonst "egal".
 - "im_angebot" und "preis" nur für echte Angebote aus der Liste (Preis wie angegeben), sonst false und "".
 - "vorrat": true für Dinge, die man meist zu Hause hat (Salz, Pfeffer, Öl, Mehl, Zucker, Gewürze, Brühe).
-- "portionen": 4.
+- "portionen": passend zum Familien-Gedächtnis (Personenzahl dort; sonst 4).
 
 Schritte: kurz, klar, in einfacher Sprache, 4–8 Schritte. "emoji": ein passendes Essens-Emoji.`;
 
 const NON_FOOD = /mode|deko|schlafzimmer|pflanzen|kosmetik|haushalt|drogerie|garten|technik|elektro|spielzeug|tier/i;
 
-async function createRecipes(ai, data) {
+async function createRecipes(ai, data, wissen = []) {
   const lines = [];
   const add = (store, o) => {
     if (NON_FOOD.test(o.group || '') || NON_FOOD.test(o.kategorie || '')) return;
@@ -247,14 +281,14 @@ async function createRecipes(ai, data) {
     return null;
   }
   lines.sort();
-  const hash = sha(lines.join('\n'));
+  const hash = sha(`${lines.join('\n')}\n${wissen.join('\n')}`);
 
   return cached('rezepte', hash, async () => {
     console.log(`  Gemini erstellt Rezepte aus ${lines.length} Angeboten …`);
     const month = new Date().toLocaleDateString('de-DE', { month: 'long' });
     const out = await ask(ai, {
       system: RECIPE_SYSTEM,
-      parts: [{ text: `Monat: ${month}\nLieblingszutaten der Mutter: ${MAMA_FAVORITES.join(', ')}\n\nAngebote dieser Woche (Laden | Produkt | Preis | Einheit):\n${lines.join('\n')}` }],
+      parts: [{ text: `Monat: ${month}\nLieblingszutaten der Mutter: ${MAMA_FAVORITES.join(', ')}\n\nDas wissen wir über die Familie – bitte unbedingt berücksichtigen:\n${wissen.map((w) => `- ${w}`).join('\n')}\n\nAngebote dieser Woche (Laden | Produkt | Preis | Einheit):\n${lines.join('\n')}` }],
       schema: RecipeSchema
     });
     return { erstellt: new Date().toISOString(), rezepte: out.rezepte };
@@ -278,7 +312,8 @@ async function main() {
 
   // 1. Rezepte (nur eine Anfrage – zuerst, damit sie sicher entstehen)
   try {
-    const recipes = await createRecipes(ai, data);
+    const wissen = OFFLINE ? START_WISSEN.map((w) => w.text) : await loadWissen();
+    const recipes = await createRecipes(ai, data, wissen);
     if (recipes) {
       const week = {
         ...recipes,

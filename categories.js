@@ -353,7 +353,8 @@ function tokens(text) {
  * @returns {number} 0 = passt nicht, 1 = passt (Teilwort), 2 = passt genau
  */
 export function offerMatchScore(itemName, offerName) {
-  const item = tokens(itemName);
+  // Zahlen/Prozente im Artikel ignorieren: "Milch 1,5 %" ↔ "Frische Milch"
+  const item = tokens(itemName).filter((t) => !/^\d+$/.test(t));
   const offer = tokens(offerName).map(stem);
   if (!item.length || !offer.length) return 0;
 
