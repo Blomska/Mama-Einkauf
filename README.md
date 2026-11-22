@@ -29,7 +29,8 @@ Ohne Login, mit Echtzeit-Abgleich für die ganze Familie, installierbar als App 
 | `manifest.json`, `sw.js`, `icons/` | PWA (Startbildschirm, Offline) |
 | `scripts/update-prospekte.mjs` | Holt Prospekte und Angebote nach `data/prospekte.json` |
 | `.github/workflows/deploy.yml` | Ruft die Prospekte täglich ab, startet die KI-Auswertung und veröffentlicht die App |
-| `scripts/ki-auswertung.mjs` | Claude: Marktkauf-Produkte aus dem Prospekt + Rezepte der Woche |
+| `scripts/ki-auswertung.mjs` | Gemini: Marktkauf-Produkte aus dem Prospekt + Rezepte der Woche |
+| `lib/gemini.mjs` | Gemeinsamer Gemini-Baustein (strukturierte Antworten, automatische Modellwahl) |
 | `worker/` + `.github/workflows/chat-helfer.yml` | Küchenhelfer (Chat) als Cloudflare Worker |
 
 > Solange in `config.js` noch die Platzhalter stehen, läuft die App im **Demo-Modus**. Dann funktioniert alles, die Liste wird aber nur auf dem jeweiligen Gerät gespeichert.
@@ -131,18 +132,22 @@ Der GitHub-Workflow startet `scripts/update-prospekte.mjs`. Das Skript liest die
 
 ## KI-Funktionen: Rezepte, Marktkauf-Produkte & Küchenhelfer (optional)
 
-Alle drei Funktionen nutzen Claude von Anthropic. Ohne Einrichtung läuft die App ganz normal weiter. Die KI-Teile bleiben dann einfach leer.
+Alle drei Funktionen nutzen **Google Gemini**. Ohne Einrichtung läuft die App ganz normal weiter. Die KI-Teile bleiben dann einfach leer.
 
 | Funktion | Was passiert | Wo es läuft |
 |---|---|---|
-| **Marktkauf-Produkte antippen** | Claude liest einmal pro Woche den Marktkauf-Prospekt und schreibt alle Produkte mit Preis und Seite heraus. Unter jeder Prospektseite kann Mama sie antippen. | GitHub-Workflow (`scripts/ki-auswertung.mjs`) |
+| **Marktkauf-Produkte antippen** | Gemini liest einmal pro Woche den Marktkauf-Prospekt und schreibt alle Produkte mit Preis und Seite heraus. Unter jeder Prospektseite kann Mama sie antippen. | GitHub-Workflow (`scripts/ki-auswertung.mjs`) |
 | **Rezepte der Woche** | 5 Familienrezepte aus den aktuellen Angeboten. Die Zutaten landen mit einem Tipp auf der Liste. | GitHub-Workflow |
 | **Küchenhelfer (Chat)** | Mama fragt z. B. „Dienstag 4 Leute zum Frühstück, was brauche ich?“. Der Helfer schlägt Artikel zum Übernehmen vor. | Cloudflare Worker (`worker/`) |
 
-### A. API-Schlüssel besorgen (für alles)
-1. Melden Sie sich auf <https://console.anthropic.com> an, legen Sie unter **Billing** Guthaben an (z. B. 5 €) und setzen Sie am besten ein **monatliches Limit** (Settings → Limits).
-2. Unter **API Keys → Create Key** einen Schlüssel erstellen und kopieren.
-3. Tragen Sie den Schlüssel auf GitHub ein: **Repository → Settings → Secrets and variables → Actions → New repository secret**, mit dem Namen `ANTHROPIC_API_KEY`.
+Der gemeinsame Gemini-Baustein liegt in `lib/gemini.mjs`. Standardmodell ist `gemini-3.8-flash`. Kennt Ihr Schlüssel dieses Modell nicht, wird automatisch das neueste verfügbare Flash-Modell gewählt. Ein bestimmtes Modell erzwingen Sie so:
+- für Rezepte/Prospekt mit der GitHub-**Variable** `GEMINI_MODEL` (Settings → Secrets and variables → Actions → Variables),
+- für den Chat mit einer Variable `GEMINI_MODEL` in `worker/wrangler.toml` unter `[vars]`.
+
+### A. Gemini-Schlüssel besorgen (für alles)
+1. Melden Sie sich auf <https://aistudio.google.com> mit einem Google-Konto an.
+2. Klicken Sie auf **Get API key → API-Schlüssel erstellen** und kopieren Sie den Schlüssel.
+3. Tragen Sie ihn auf GitHub ein: **Repository → Settings → Secrets and variables → Actions → New repository secret**, mit dem Namen `GEMINI_API_KEY`.
 
 Damit funktionieren **Rezepte und Marktkauf-Produkte** ab dem nächsten Workflow-Lauf. Zum Sofort-Testen starten Sie unter **Actions → „Prospekte aktualisieren & veröffentlichen“ → Run workflow**.
 
@@ -155,16 +160,15 @@ Der Chat braucht einen kleinen Server, weil der API-Schlüssel nie in der App st
 4. Legen Sie auf GitHub drei weitere Secrets an:
    - `CLOUDFLARE_API_TOKEN` (das Token aus Schritt 3)
    - `CLOUDFLARE_ACCOUNT_ID` (die ID aus Schritt 2)
-   - `FAMILY_CODE`: ein frei gewählter Familien-Code (z. B. `Lüdi2026`). Mama gibt ihn einmal im Helfer ein, danach merkt sich das Handy ihn. Er schützt vor fremder Nutzung und Kosten.
+   - `FAMILY_CODE`: ein frei gewählter Familien-Code (z. B. `Lüdi2026`). Mama gibt ihn einmal im Helfer ein, danach merkt sich das Handy ihn. Er schützt vor fremder Nutzung.
 5. Starten Sie unter **Actions → „Chat-Helfer veröffentlichen“ → Run workflow**. Im Protokoll steht am Ende die Adresse, z. B. `https://mama-einkauf-helfer.<name>.workers.dev`.
 6. Tragen Sie diese Adresse in `config.js` bei `CHAT_URL` ein und committen Sie die Änderung. Fertig!
 
-### Kosten (Richtwerte)
-- Prospekt lesen + Rezepte: ca. **0,30–0,60 € pro Woche** (nur wenn sich Prospekt oder Angebote ändern, Ergebnisse werden zwischengespeichert).
-- Chat: ca. **1–3 Cent pro Frage**.
+### Kosten & Datenschutz
+- **Kostenloses Kontingent:** Google bietet für Gemini-Flash-Modelle ein kostenloses Kontingent mit Ratenlimits. Für eine Familie reicht das normalerweise: Pro Woche gibt es nur wenige Anfragen für Prospekt und Rezepte, dazu die Chat-Fragen. Die aktuellen Limits stehen auf <https://ai.google.dev/gemini-api/docs/pricing>.
+- **Datenschutz:** Im kostenlosen Kontingent darf Google die Eingaben laut seinen Bedingungen zur Verbesserung seiner Produkte verwenden. Geben Sie also nichts Vertrauliches in den Chat ein. Wer das nicht möchte, aktiviert in AI Studio die Abrechnung (bezahltes Kontingent).
+- Prospekt- und Rezept-Ergebnisse werden zwischengespeichert. Gemini wird nur gefragt, wenn sich Prospekt oder Angebote ändern.
 - Cloudflare Worker: kostenlos (bis 100.000 Anfragen pro Tag).
-
-Modell: `claude-opus-5-5`. Ist eine Anfrage von den Sicherheitsfiltern betroffen, springt automatisch ein Ersatzmodell ein (Server-Fallback).
 
 ## Lokal testen
 

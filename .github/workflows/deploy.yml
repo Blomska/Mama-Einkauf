@@ -43,7 +43,7 @@ jobs:
         run: node scripts/update-prospekte.mjs
         continue-on-error: true   # bei Ausfall: zuletzt gespeicherte Daten nutzen
 
-      # Zwischenspeicher für KI-Ergebnisse: Claude wird nur gefragt, wenn sich
+      # Zwischenspeicher für KI-Ergebnisse: Gemini wird nur gefragt, wenn sich
       # Prospekt oder Angebote geändert haben (spart Kosten).
       - name: KI-Zwischenspeicher laden
         uses: actions/cache@v4
@@ -56,7 +56,8 @@ jobs:
         run: node scripts/ki-auswertung.mjs
         continue-on-error: true
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
 
       - name: Webseite zusammenstellen
         run: |

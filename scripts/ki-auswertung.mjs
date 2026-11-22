@@ -2,7 +2,7 @@
 /**
  * scripts/ki-auswertung.mjs
  * ------------------------------------------------------------------
- * Läuft im GitHub-Workflow NACH update-prospekte.mjs und nutzt Claude für:
+ * Läuft im GitHub-Workflow NACH update-prospekte.mjs und nutzt Google Gemini für:
  *
  *  1. Marktkauf-Prospekt lesen: Alle Produkte mit Preis werden aus den
  *     Seitenbildern (data/mk-seiten/) herausgeschrieben – inkl. Seitenzahl.
@@ -10,11 +10,12 @@
  *  2. Rezepte der Woche: 5 Familienrezepte aus den aktuellen Angeboten
  *     beider Läden → data/rezepte.json
  *
- * Benötigt das GitHub-Secret ANTHROPIC_API_KEY. Ohne Schlüssel beendet sich
- * das Skript ohne Fehler (die App funktioniert dann wie bisher).
+ * Benötigt das GitHub-Secret GEMINI_API_KEY (Google AI Studio). Ohne Schlüssel
+ * beendet sich das Skript ohne Fehler (die App funktioniert dann wie bisher).
+ * Optional: GEMINI_MODEL legt ein bestimmtes Modell fest.
  *
  * Kosten sparen: Ergebnisse werden in .ki-cache/ zwischengespeichert
- * (per actions/cache) – Claude wird nur gefragt, wenn sich Prospekt oder
+ * (per actions/cache) – Gemini wird nur gefragt, wenn sich Prospekt oder
  * Angebote wirklich geändert haben (also etwa 1–2× pro Woche).
  * ------------------------------------------------------------------
  */
@@ -23,9 +24,8 @@ import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import Anthropic from '@anthropic-ai/sdk';
-import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import * as z from 'zod';
+import { createClient, generateJson } from '../lib/gemini.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DATA_FILE = resolve(ROOT, 'data/prospekte.json');
@@ -33,9 +33,9 @@ const REZEPTE_FILE = resolve(ROOT, 'data/rezepte.json');
 const PAGES_DIR = resolve(ROOT, 'data/mk-seiten');
 const CACHE_DIR = resolve(ROOT, '.ki-cache');
 
-const MODEL = 'claude-opus-5-5';
+const MODEL = process.env.GEMINI_MODEL || undefined; // leer = automatisch
 const PAGES_PER_REQUEST = 5;
-const PARALLEL_REQUESTS = 3;
+const PARALLEL_REQUESTS = 2; // schont die Ratenlimits des kostenlosen Kontingents
 
 // Mamas feste Favoriten (wie in config.js) – fließen in die Rezeptauswahl ein
 const MAMA_FAVORITES = ['Skyr', 'Eier', 'Milch', 'Rinderhack', 'Avocados'];
@@ -84,30 +84,15 @@ async function pool(tasks, limit) {
   return results;
 }
 
-/**
- * Ein Claude-Aufruf mit strukturierter Ausgabe (Zod-Schema).
- * Server-seitiger Fallback ist aktiv: Lehnt das Modell eine Anfrage aus
- * Sicherheitsgründen ab, übernimmt automatisch ein passendes anderes Modell.
- */
-async function ask(client, { system, content, schema, effort = 'medium', maxTokens = 16000 }) {
-  const response = await client.beta.messages.parse({
-    model: MODEL,
-    max_tokens: maxTokens,
-    betas: ['server-side-fallback-2026-07-01'],
-    fallbacks: 'default',
+/** Ein Gemini-Aufruf mit strukturierter Ausgabe (Zod-Schema). */
+async function ask(ai, { system, parts, schema, maxTokens = 32768 }) {
+  return generateJson(ai, {
     system,
-    messages: [{ role: 'user', content }],
-    output_config: { effort, format: betaZodOutputFormat(schema) }
+    contents: [{ role: 'user', parts }],
+    schema,
+    maxTokens,
+    model: MODEL
   });
-  if (response.stop_reason === 'refusal') {
-    throw new Error(`Anfrage abgelehnt (${response.stop_details?.category ?? 'ohne Kategorie'})`);
-  }
-  if (response.stop_reason === 'max_tokens') {
-    throw new Error('Antwort zu lang (max_tokens erreicht)');
-  }
-  if (!response.parsed_output) throw new Error('Antwort konnte nicht gelesen werden');
-  console.log(`    Tokens: ${response.usage.input_tokens} rein / ${response.usage.output_tokens} raus`);
-  return response.parsed_output;
 }
 
 /* ---------------- 1. Marktkauf-Prospekt lesen ---------------- */
@@ -139,7 +124,7 @@ Regeln:
 - "kategorie": passende Supermarkt-Abteilung.
 - Lies Preise sehr sorgfältig. Wenn ein Preis unleserlich ist, lass das Produkt weg.`;
 
-async function extractMarktkauf(client) {
+async function extractMarktkauf(ai) {
   let files = [];
   try {
     files = (await readdir(PAGES_DIR))
@@ -156,19 +141,19 @@ async function extractMarktkauf(client) {
   const hash = sha(Buffer.concat(images.map((i) => i.data)));
 
   return cached('marktkauf-produkte', hash, async () => {
-    console.log(`  Claude liest ${images.length} Marktkauf-Seiten …`);
+    console.log(`  Gemini liest ${images.length} Marktkauf-Seiten …`);
     const batches = [];
     for (let i = 0; i < images.length; i += PAGES_PER_REQUEST) batches.push(images.slice(i, i + PAGES_PER_REQUEST));
 
     const results = await pool(batches.map((batch) => async () => {
-      const content = [];
+      const parts = [];
       for (const img of batch) {
-        content.push({ type: 'text', text: `Seite ${img.n}:` });
-        content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: img.data.toString('base64') } });
+        parts.push({ text: `Seite ${img.n}:` });
+        parts.push({ inlineData: { mimeType: 'image/jpeg', data: img.data.toString('base64') } });
       }
-      content.push({ type: 'text', text: 'Schreibe alle Angebote dieser Seiten heraus.' });
+      parts.push({ text: 'Schreibe alle Angebote dieser Seiten heraus.' });
       try {
-        const out = await ask(client, { system: EXTRACT_SYSTEM, content, schema: ProductSchema });
+        const out = await ask(ai, { system: EXTRACT_SYSTEM, parts, schema: ProductSchema });
         return out.produkte;
       } catch (err) {
         console.warn(`    Seiten ${batch[0].n}–${batch.at(-1).n}: ${err.message}`);
@@ -221,7 +206,7 @@ Schritte: kurz, klar, in einfacher Sprache, 4–8 Schritte. "emoji": ein passend
 
 const NON_FOOD = /mode|deko|schlafzimmer|pflanzen|kosmetik|haushalt|drogerie|garten|technik|elektro|spielzeug|tier/i;
 
-async function createRecipes(client, data) {
+async function createRecipes(ai, data) {
   const lines = [];
   const add = (store, o) => {
     if (NON_FOOD.test(o.group || '') || NON_FOOD.test(o.kategorie || '')) return;
@@ -237,11 +222,11 @@ async function createRecipes(client, data) {
   const hash = sha(lines.join('\n'));
 
   return cached('rezepte', hash, async () => {
-    console.log(`  Claude erstellt Rezepte aus ${lines.length} Angeboten …`);
+    console.log(`  Gemini erstellt Rezepte aus ${lines.length} Angeboten …`);
     const month = new Date().toLocaleDateString('de-DE', { month: 'long' });
-    const out = await ask(client, {
+    const out = await ask(ai, {
       system: RECIPE_SYSTEM,
-      content: `Monat: ${month}\nLieblingszutaten der Mutter: ${MAMA_FAVORITES.join(', ')}\n\nAngebote dieser Woche (Laden | Produkt | Preis | Einheit):\n${lines.join('\n')}`,
+      parts: [{ text: `Monat: ${month}\nLieblingszutaten der Mutter: ${MAMA_FAVORITES.join(', ')}\n\nAngebote dieser Woche (Laden | Produkt | Preis | Einheit):\n${lines.join('\n')}` }],
       schema: RecipeSchema
     });
     return { erstellt: new Date().toISOString(), rezepte: out.rezepte };
@@ -251,11 +236,11 @@ async function createRecipes(client, data) {
 /* ---------------- Hauptprogramm ---------------- */
 
 async function main() {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.log('Kein ANTHROPIC_API_KEY gesetzt – KI-Funktionen (Rezepte, Marktkauf-Produkte) übersprungen.');
+  if (!process.env.GEMINI_API_KEY) {
+    console.log('Kein GEMINI_API_KEY gesetzt – KI-Funktionen (Rezepte, Marktkauf-Produkte) übersprungen.');
     return;
   }
-  const client = new Anthropic();
+  const ai = createClient(process.env.GEMINI_API_KEY);
   const data = await readJson(DATA_FILE);
   if (!data) {
     console.log('Keine data/prospekte.json – übersprungen.');
@@ -264,7 +249,7 @@ async function main() {
 
   // 1. Marktkauf-Produkte aus den Prospektseiten
   try {
-    const products = await extractMarktkauf(client);
+    const products = await extractMarktkauf(ai);
     if (products?.length && !data.marktkauf?.offers?.offers?.length) {
       const current = data.marktkauf?.current || {};
       const offers = products.map((p, i) => ({
@@ -293,7 +278,7 @@ async function main() {
 
   // 2. Rezepte
   try {
-    const recipes = await createRecipes(client, data);
+    const recipes = await createRecipes(ai, data);
     if (recipes) {
       const week = {
         ...recipes,

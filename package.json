@@ -8,7 +8,7 @@
     "ki": "node scripts/ki-auswertung.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "1.12.0",
+    "@google/genai": "3.6.1",
     "zod": "4.6.7"
   }
 }

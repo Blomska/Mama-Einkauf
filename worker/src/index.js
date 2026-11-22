@@ -3,21 +3,20 @@
  * ------------------------------------------------------------------
  * Die App schickt den Chatverlauf + die aktuelle Einkaufsliste hierher.
  * Der Worker ergänzt die Angebote der Woche (aus data/prospekte.json der
- * App), fragt Claude und gibt eine freundliche Antwort plus – falls passend –
+ * App), fragt Google Gemini und gibt eine freundliche Antwort plus – falls passend –
  * eine Liste von Artikeln zurück, die Mama mit einem Tipp übernehmen kann.
  *
  * Geheimnisse (als Worker-Secrets, NIE im Code):
- *   ANTHROPIC_API_KEY – API-Schlüssel von console.anthropic.com
+ *   GEMINI_API_KEY    – API-Schlüssel von aistudio.google.com
+ * Optional (Variable): GEMINI_MODEL – bestimmtes Gemini-Modell erzwingen
  *   FAMILY_CODE       – Familien-Code, den die App einmalig abfragt
  *                       (schützt vor fremder Nutzung und Kosten)
  * ------------------------------------------------------------------
  */
 
-import Anthropic from '@anthropic-ai/sdk';
-import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import * as z from 'zod';
+import { createClient, generateJson, GeminiBlocked, ApiError } from '../../lib/gemini.mjs';
 
-const MODEL = 'claude-opus-5-5';
 const MAX_MESSAGES = 24;
 const MAX_MESSAGE_CHARS = 2000;
 const RATE_LIMIT_PER_HOUR = 40;
@@ -131,14 +130,14 @@ export default {
 
     const url = new URL(request.url);
     if (url.pathname === '/status') {
-      return json({ ok: Boolean(env.ANTHROPIC_API_KEY), familienCode: Boolean(env.FAMILY_CODE) }, 200, cors);
+      return json({ ok: Boolean(env.GEMINI_API_KEY), familienCode: Boolean(env.FAMILY_CODE) }, 200, cors);
     }
     if (url.pathname !== '/chat' || request.method !== 'POST') return json({ fehler: 'Nicht gefunden' }, 404, cors);
     if (!originOk) return json({ fehler: 'Nicht erlaubt' }, 403, cors);
     if (env.FAMILY_CODE && request.headers.get('X-Familien-Code') !== env.FAMILY_CODE) {
       return json({ fehler: 'code', antwort: 'Der Familien-Code stimmt nicht.' }, 401, cors);
     }
-    if (!env.ANTHROPIC_API_KEY) return json({ fehler: 'Der Helfer ist noch nicht eingerichtet.' }, 503, cors);
+    if (!env.GEMINI_API_KEY) return json({ fehler: 'Der Helfer ist noch nicht eingerichtet.' }, 503, cors);
 
     const ip = request.headers.get('CF-Connecting-IP') || 'unbekannt';
     if (rateLimited(ip)) {
@@ -157,51 +156,39 @@ export default {
     const list = Array.isArray(body?.liste) ? body.liste.filter((s) => typeof s === 'string').slice(0, 150).map((s) => s.slice(0, 80)) : [];
     const today = new Date().toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Berlin' });
 
-    // Aktueller Stand (ändert sich pro Anfrage) gehört in die letzte Nachricht,
-    // damit System-Prompt + Angebote im Prompt-Cache bleiben.
-    const last = messages.pop();
-    messages.push({
-      role: 'user',
-      content: [
-        { type: 'text', text: `[Heute ist ${today}. Auf der Einkaufsliste steht schon: ${list.length ? list.join(', ') : 'noch nichts'}.]` },
-        { type: 'text', text: last.content }
-      ]
+    // Gemini-Format: Rollen "user" / "model". Der aktuelle Stand (Datum, Liste)
+    // kommt in die letzte Nachricht.
+    const contents = messages.map((m, i) => {
+      const isLast = i === messages.length - 1;
+      const text = isLast
+        ? `[Heute ist ${today}. Auf der Einkaufsliste steht schon: ${list.length ? list.join(', ') : 'noch nichts'}.]\n\n${m.content}`
+        : m.content;
+      return { role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text }] };
     });
 
-    const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+    const ai = createClient(env.GEMINI_API_KEY);
     try {
-      const response = await client.beta.messages.parse({
-        model: MODEL,
-        max_tokens: 4000,
-        betas: ['server-side-fallback-2026-07-01'],
-        fallbacks: 'default',
-        system: [
-          { type: 'text', text: SYSTEM_PROMPT },
-          { type: 'text', text: await offersContext(env), cache_control: { type: 'ephemeral' } }
-        ],
-        messages,
-        output_config: { effort: 'low', format: betaZodOutputFormat(ReplySchema) }
+      const out = await generateJson(ai, {
+        system: `${SYSTEM_PROMPT}\n\n${await offersContext(env)}`,
+        contents,
+        schema: ReplySchema,
+        maxTokens: 8192,
+        model: env.GEMINI_MODEL || undefined
       });
-
-      if (response.stop_reason === 'refusal') {
-        return json({ antwort: 'Dabei kann ich leider nicht helfen. Frag mich gern etwas anderes rund ums Einkaufen und Kochen! 😊', artikel: [] }, 200, cors);
-      }
-      const out = response.parsed_output;
-      if (!out) {
-        return json({ antwort: 'Da ist etwas durcheinandergeraten – magst du es nochmal fragen?', artikel: [] }, 200, cors);
-      }
       return json({ antwort: out.antwort, artikel: out.artikel.slice(0, 40) }, 200, cors);
     } catch (err) {
-      if (err instanceof Anthropic.RateLimitError) {
-        return json({ fehler: 'Gerade ist viel los – bitte gleich nochmal versuchen.' }, 429, cors);
+      if (err instanceof GeminiBlocked) {
+        return json({ antwort: 'Dabei kann ich leider nicht helfen. Frag mich gern etwas anderes rund ums Einkaufen und Kochen! 😊', artikel: [] }, 200, cors);
       }
-      if (err instanceof Anthropic.AuthenticationError) {
-        return json({ fehler: 'Der API-Schlüssel des Helfers stimmt nicht.' }, 503, cors);
+      if (err instanceof ApiError) {
+        if (err.status === 429) return json({ fehler: 'Gerade ist viel los – bitte in einer Minute nochmal versuchen.' }, 429, cors);
+        if (err.status === 400 || err.status === 401 || err.status === 403) {
+          return json({ fehler: 'Der Helfer kommt gerade nicht an Gemini heran (Schlüssel oder Einstellung prüfen).' }, 503, cors);
+        }
+        return json({ fehler: `Der Helfer hat gerade ein Problem (${err.status}).` }, 502, cors);
       }
-      if (err instanceof Anthropic.APIError) {
-        return json({ fehler: `Der Helfer hat gerade ein Problem (${err.status ?? 'Verbindung'}).` }, 502, cors);
-      }
-      return json({ fehler: 'Unerwarteter Fehler im Helfer.' }, 500, cors);
+      console.error('[Helfer]', err);
+      return json({ antwort: 'Da ist etwas durcheinandergeraten – magst du es nochmal fragen?', artikel: [] }, 200, cors);
     }
   }
 };

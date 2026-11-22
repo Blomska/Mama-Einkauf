@@ -3,7 +3,7 @@
 # Einmalig einrichten (GitHub → Settings → Secrets and variables → Actions):
 #   CLOUDFLARE_API_TOKEN   – Cloudflare-API-Token ("Edit Cloudflare Workers")
 #   CLOUDFLARE_ACCOUNT_ID  – Cloudflare-Konto-ID
-#   ANTHROPIC_API_KEY      – API-Schlüssel von console.anthropic.com
+#   GEMINI_API_KEY         – API-Schlüssel von aistudio.google.com
 #   FAMILY_CODE            – frei gewählter Familien-Code (z. B. "Lüdi2026")
 name: Chat-Helfer veröffentlichen
 
@@ -12,6 +12,7 @@ on:
     branches: [main, ccr-a6e722a0-k5p30p]
     paths:
       - 'worker/**'
+      - 'lib/**'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/chat-helfer.yml'
@@ -58,8 +59,8 @@ jobs:
           wranglerVersion: '4.166.0'
           workingDirectory: worker
           secrets: |
-            ANTHROPIC_API_KEY
+            GEMINI_API_KEY
             FAMILY_CODE
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FAMILY_CODE: ${{ secrets.FAMILY_CODE }}
