@@ -51,7 +51,7 @@
           <label for="itemInput" class="visually-hidden">Was wird gebraucht?</label>
           <div class="composer__row">
             <textarea id="itemInput" rows="1" enterkeyhint="done"
-                      placeholder="z. B. Milch, Eier, 500 g Rinderhack"
+                      placeholder="z. B. Milch, Eier, Brot"
                       aria-describedby="inputHint"></textarea>
             <button type="button" class="mic" id="micBtn" aria-label="Einsprechen" aria-pressed="false" hidden>
               <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path fill="currentColor" d="M12 15a3.5 3.5 0 0 0 3.5-3.5v-6a3.5 3.5 0 1 0-7 0v6A3.5 3.5 0 0 0 12 15zm6-3.5a1 1 0 1 0-2 0 4 4 0 0 1-8 0 1 1 0 1 0-2 0 6 6 0 0 0 5 5.91V20H8.5a1 1 0 1 0 0 2h7a1 1 0 1 0 0-2H13v-2.59a6 6 0 0 0 5-5.91z"/></svg>
@@ -70,6 +70,15 @@
             <span aria-hidden="true">＋</span> Auf die Liste
           </button>
         </form>
+
+        <div class="weekly" id="weeklyWrap" hidden>
+          <h2 class="weekly__title" id="weeklyTitle">🛒 Samstag ist Wocheneinkauf – fehlt noch was?</h2>
+          <div class="chips chips--fav" id="weekly"></div>
+          <div class="weekly__actions">
+            <button type="button" class="btn btn--primary" id="weeklyAll">＋ Alle auf die Liste</button>
+            <button type="button" class="btn btn--ghost" id="weeklyHide">Diese Woche ausblenden</button>
+          </div>
+        </div>
 
         <div class="favorites" id="favoritesWrap" hidden>
           <h2 class="section-label">Oft gekauft – einfach antippen</h2>

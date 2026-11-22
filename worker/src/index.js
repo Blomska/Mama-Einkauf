@@ -79,6 +79,7 @@ Wie du antwortest:
   • "wenn"/"dann" nur, wenn ein Artikelname auf der Einkaufsliste immer ersetzt werden soll, z. B. wenn "Joghurt", dann "Ehrmann Joghurt". Sonst beide leer.
   • Frag in "antwort" kurz: "Soll ich mir das merken?" – die App zeigt dafür einen Knopf.
   • Ohne neue dauerhafte Info bleibt "merken" leer. Schlage nie etwas vor, das schon im Gedächtnis steht.
+- Lieblingsmarken lernst du mit der Zeit: Nennt sie eine Marke (z. B. "die Butter von Kerrygold") oder steht ein Markenprodukt auf ihrer Liste, das noch nicht im Gedächtnis ist, frag ruhig nach, ob das ihre feste Marke ist, und schlage es zum Merken vor.
 - Bleib beim Thema Essen, Einkaufen, Haushalt und Planung. Bei anderem antworte freundlich und kurz.`;
 
 /* ---------------- Hilfsfunktionen ---------------- */

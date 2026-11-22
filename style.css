@@ -1228,3 +1228,11 @@ h1, h2, h3, .btn, .chip, .tab { font-family: var(--font); }
 .memory-suggest__row > span:first-child { flex: 1; }
 .memory-suggest__row .btn { min-height: 44px; padding: 0 14px; font-size: 15px; }
 .memory-suggest__done { color: var(--primary-dark); font-weight: 800; }
+
+/* Wocheneinkauf-Check */
+.weekly { margin-top: 18px; padding: 14px; border: 2px solid #CFEBDB; border-radius: 18px; background: #F4FBF7; }
+.weekly__title { margin: 0 0 10px; font-size: 17px; font-weight: 900; color: var(--primary-dark); }
+.weekly .chip--fav { background: #fff; }
+.weekly .chip small { color: var(--text-faint); font-weight: 600; }
+.weekly__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.weekly__actions .btn { flex: 1; min-height: 48px; font-size: 16px; padding: 0 12px; }

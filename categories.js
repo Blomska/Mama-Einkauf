@@ -132,7 +132,7 @@ export const CATEGORIES = [
       'tiefkühl', '=tk', 'gefroren', 'pizza', 'tiefkühlpizza', 'pommes', 'kroketten',
       'rösti', 'fischstäbchen', '=eis', 'speiseeis', 'eiscreme', 'vanilleeis', 'schokoeis', 'eis am stiel',
       'magnum', 'tk-gemüse', 'rahmspinat', 'tk-erbsen', 'kräuter tk', 'blätterspinat', 'eiswürfel',
-      'tiefkühlbeeren', 'aufbackpizza', 'lasagne tk', 'baguette tk', 'kartoffeltaschen', 'backfisch'
+      'tiefkühlbeeren', 'tiefkühl-beeren', 'tk-beeren', 'gefrorene beeren', 'aufbackpizza', 'lasagne tk', 'baguette tk', 'kartoffeltaschen', 'backfisch'
     ]
   },
   {

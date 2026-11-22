@@ -38,7 +38,7 @@ import {
   firebaseConfig, LIST_ID, USE_ANONYMOUS_AUTH, OFFER_LINKS, MAMA_FAVORITES, GREETING_NAME, CHAT_URL,
   isFirebaseConfigured
 } from './config.js';
-import { START_WISSEN } from './wissen.js';
+import { START_WISSEN, WISSEN_VERSION, WOCHENEINKAUF } from './wissen.js';
 
 /* ================================================================
  * 1. Konstanten & Hilfsfunktionen
@@ -832,6 +832,7 @@ function render() {
   els.doneList.innerHTML = state.doneOpen ? done.map(itemHtml).join('') : '';
 
   renderFavorites();
+  renderWeeklyCheck();
   renderProspektCards();
   renderDeals();
   updateGreeting();
@@ -1524,7 +1525,7 @@ function attachSpeech(button, input, { placeholder, onUpdate, onDone }) {
 
 function initSpeech() {
   attachSpeech(els.mic, els.input, {
-    placeholder: 'z. B. Milch, Eier, 500 g Rinderhack',
+    placeholder: 'z. B. Milch, Eier, Brot',
     onUpdate: () => { autoGrow(); updateSuggestions(); },
     onDone: () => {
       els.addBtn.classList.add('is-pulse');
@@ -1872,13 +1873,44 @@ function startWissenEntries() {
   return START_WISSEN.map((w, i) => ({ ...w, createdAt: i }));
 }
 
+/* ---------- Wocheneinkauf-Check (Do–Sa) ---------- */
+
+function weekKey(date = new Date()) {
+  // Samstag der laufenden Woche als Schlüssel
+  const d = new Date(date);
+  d.setDate(d.getDate() + ((6 - d.getDay() + 7) % 7));
+  return d.toISOString().slice(0, 10);
+}
+
+function renderWeeklyCheck() {
+  const wrap = $('#weeklyWrap');
+  if (!wrap) return;
+  const day = new Date().getDay(); // 4 = Do, 5 = Fr, 6 = Sa
+  const dismissed = readJSON('einkauf:wocheneinkauf-aus', '') === weekKey();
+  const open = onListNames();
+  const missing = WOCHENEINKAUF.filter((w) => !open.has(normalize(applyWissen(w.name))));
+  wrap.hidden = !(day >= 4 && day <= 6) || dismissed || !missing.length;
+  if (wrap.hidden) return;
+  $('#weeklyTitle').textContent = day === 6 ? '🛒 Heute ist Wocheneinkauf – fehlt noch was?' : '🛒 Samstag ist Wocheneinkauf – fehlt noch was?';
+  $('#weekly').innerHTML = missing.map((w) => `
+    <button type="button" class="chip chip--fav" data-weekly="${escapeHtml(w.name)}" data-weekly-qty="${escapeHtml(w.qty || '')}">
+      <span>${escapeHtml(w.name)}${w.qty ? ` <small>(${escapeHtml(w.qty)})</small>` : ''}</span>
+    </button>`).join('');
+}
+
 function handleWissen(map, meta = {}) {
   // Startwissen einmalig ins gemeinsame Gedächtnis übernehmen
   // (nur nach echter Server-Antwort, damit Gelöschtes nicht zurückkommt)
-  if (!map._start && meta.fromServer) {
-    const seed = { _start: { seeded: true, at: Date.now() } };
-    startWissenEntries().forEach(({ id, ...entry }) => { seed[id] = entry; });
+  const seededVersion = map._start ? (map._start.version || 1) : 0;
+  if (seededVersion < WISSEN_VERSION && meta.fromServer) {
+    // Nur Einträge übernehmen, die seit der letzten Übernahme neu sind
+    const seed = { _start: { seeded: true, version: WISSEN_VERSION, at: Date.now() } };
+    startWissenEntries()
+      .filter((w) => (w.seit || 1) > seededVersion)
+      .forEach(({ id, seit, ...entry }) => { seed[id] = entry; });
     backend.setWissen(seed);
+    // Das Speichern löst gleich eine neue Meldung mit dem vollständigen Stand aus
+    return;
   }
   const entries = Object.entries(map)
     .filter(([id]) => id !== '_start')
@@ -2358,6 +2390,21 @@ function bindEvents() {
     chat.needsCode = false;
     renderChat();
     showToast('Gespeichert – jetzt kannst du loslegen! 😊');
+  });
+
+  // Wocheneinkauf-Check
+  $('#weekly').addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-weekly]');
+    if (chip) addParsed([{ name: chip.dataset.weekly, qty: chip.dataset.weeklyQty }]);
+  });
+  $('#weeklyAll').addEventListener('click', () => {
+    const open = onListNames();
+    const missing = WOCHENEINKAUF.filter((w) => !open.has(normalize(applyWissen(w.name))));
+    addParsed(missing.map((w) => ({ name: w.name, qty: w.qty || '' })));
+  });
+  $('#weeklyHide').addEventListener('click', () => {
+    writeJSON('einkauf:wocheneinkauf-aus', weekKey());
+    renderWeeklyCheck();
   });
 
   // Familien-Gedächtnis
