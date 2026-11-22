@@ -57,10 +57,10 @@ jobs:
           key: ki-cache-${{ github.run_id }}
           restore-keys: ki-cache-
 
-      # Nur zu den festen Zeiten bzw. bei manuellem Start – nicht bei jedem Code-Upload
-      # (schont das kostenlose Gemini-Kontingent für den Küchenhelfer)
+      # Neue Gemini-Anfragen nur zu den festen Zeiten bzw. bei manuellem Start.
+      # Bei Code-Uploads (push) werden nur die zwischengespeicherten Ergebnisse
+      # übernommen – das schont das kostenlose Kontingent für den Küchenhelfer.
       - name: KI – Marktkauf-Produkte & Rezepte der Woche
-        if: github.event_name != 'push'
         run: node scripts/ki-auswertung.mjs
         continue-on-error: true
         timeout-minutes: 12
@@ -68,6 +68,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.GEMINIAPIKEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           KI_NUR_REZEPTE: ${{ inputs.nur_rezepte && '1' || '' }}
+          KI_OFFLINE: ${{ github.event_name == 'push' && '1' || '' }}
 
       - name: Webseite zusammenstellen
         run: |

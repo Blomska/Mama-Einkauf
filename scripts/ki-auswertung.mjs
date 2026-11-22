@@ -58,21 +58,35 @@ async function readJson(file, fallback = null) {
   }
 }
 
+// Ohne Anfragen an Gemini arbeiten (z. B. bei Veröffentlichung nach Code-Upload):
+// es werden nur zwischengespeicherte Ergebnisse verwendet.
+const OFFLINE = Boolean(process.env.KI_OFFLINE);
+// Manueller Lauf "nur Rezepte": Prospektseiten nur aus dem Zwischenspeicher
+const NUR_REZEPTE = Boolean(process.env.KI_NUR_REZEPTE);
+
+/**
+ * Zwischenspeicher: Ergebnis zu `hash` laden oder neu berechnen.
+ * Zusätzlich wird immer das letzte Ergebnis als "<name>-latest" gemerkt –
+ * im OFFLINE-Modus wird dieses verwendet, wenn es zum Hash nichts gibt.
+ */
 async function cached(name, hash, compute) {
-  const file = resolve(CACHE_DIR, `${name}-v2-${hash}.json`);
+  const file = resolve(CACHE_DIR, `${name}-v3-${hash}.json`);
+  const latest = resolve(CACHE_DIR, `${name}-v3-latest.json`);
   const hit = await readJson(file);
   if (hit) {
-    console.log(`  ↺ ${name}: aus dem Zwischenspeicher (keine neuen Kosten)`);
+    console.log(`  ↺ ${name}: aus dem Zwischenspeicher (keine neuen Anfragen)`);
     return hit;
   }
-  const value = await compute();
-  // Unvollständige Ergebnisse nicht speichern – beim nächsten Lauf neu versuchen
-  if (value && value.unvollstaendig) {
-    console.warn(`  ${name}: unvollständig – wird beim nächsten Lauf erneut versucht`);
-    return value;
+  if (OFFLINE) {
+    const last = await readJson(latest);
+    if (last) console.log(`  ↺ ${name}: letztes Ergebnis übernommen (ohne Anfragen)`);
+    return last;
   }
+  const value = await compute();
+  if (value == null) return null;
   await mkdir(CACHE_DIR, { recursive: true });
-  await writeFile(file, JSON.stringify(value));
+  await writeFile(latest, JSON.stringify(value));
+  if (!value.unvollstaendig) await writeFile(file, JSON.stringify(value));
   return value;
 }
 
@@ -131,54 +145,52 @@ async function extractMarktkauf(ai) {
   if (!files.length) return null;
 
   const images = await Promise.all(files.map(async ({ f, n }) => ({ n, data: await readFile(resolve(PAGES_DIR, f)) })));
-  const hash = sha(Buffer.concat(images.map((i) => i.data)));
+  const batches = [];
+  for (let i = 0; i < images.length; i += PAGES_PER_REQUEST) batches.push(images.slice(i, i + PAGES_PER_REQUEST));
 
-  return cached('marktkauf-produkte', hash, async () => {
-    console.log(`  Gemini liest ${images.length} Marktkauf-Seiten …`);
-    const batches = [];
-    for (let i = 0; i < images.length; i += PAGES_PER_REQUEST) batches.push(images.slice(i, i + PAGES_PER_REQUEST));
-
-    // Nacheinander mit Pause; bei erschöpftem Kontingent sofort aufhören
-    let quotaHit = false;
-    const started = Date.now();
-    const results = [];
-    for (const [bi, batch] of batches.entries()) {
-      if (quotaHit) { results.push(null); continue; }
-      if (Date.now() - started > EXTRACT_BUDGET_MS) {
-        console.warn('  Zeitlimit erreicht – restliche Seiten beim nächsten Lauf');
-        results.push(null);
-        continue;
-      }
-      if (bi > 0) await new Promise((r) => setTimeout(r, PAUSE_MS));
-      results.push(await (async () => {
-      const parts = [];
-      for (const img of batch) {
-        parts.push({ text: `Seite ${img.n}:` });
-        parts.push({ inlineData: { mimeType: 'image/jpeg', data: img.data.toString('base64') } });
-      }
-      parts.push({ text: 'Schreibe alle Angebote dieser Seiten heraus.' });
-      try {
-        const out = await ask(ai, { system: EXTRACT_SYSTEM, parts, schema: ProductSchema });
-        return out.produkte;
-      } catch (err) {
-        console.warn(`    Seiten ${batch[0].n}–${batch.at(-1).n}: ${err.message}`);
-        if (isQuota(err)) {
-          quotaHit = true;
-          console.warn('  Kontingent erschöpft – Prospekt-Auswertung wird beim nächsten Lauf fortgesetzt');
-        }
-        return null;
-      }
-      })());
+  // Jedes Seitenpaket wird einzeln zwischengespeichert – so geht Fortschritt
+  // nie verloren und spätere Läufe machen nur die noch fehlenden Seiten.
+  let quotaHit = false;
+  let requests = 0;
+  const started = Date.now();
+  const results = [];
+  for (const batch of batches) {
+    const file = resolve(CACHE_DIR, `mk-seiten-v3-${sha(Buffer.concat(batch.map((b) => b.data)))}.json`);
+    const hit = await readJson(file);
+    if (hit) {
+      results.push(hit);
+      continue;
     }
-
-    const failed = results.filter((r) => r === null).length;
-    const products = results.filter(Boolean).flat();
-    if (failed) {
-      console.warn(`  ${failed} von ${results.length} Seitenpaketen fehlgeschlagen`);
-      return Object.assign(products, { unvollstaendig: true });
+    if (OFFLINE || NUR_REZEPTE || quotaHit || Date.now() - started > EXTRACT_BUDGET_MS) {
+      results.push(null);
+      continue;
     }
-    return products;
-  });
+    if (requests > 0) await new Promise((r) => setTimeout(r, PAUSE_MS));
+    requests += 1;
+    const parts = [];
+    for (const img of batch) {
+      parts.push({ text: `Seite ${img.n}:` });
+      parts.push({ inlineData: { mimeType: 'image/jpeg', data: img.data.toString('base64') } });
+    }
+    parts.push({ text: 'Schreibe alle Angebote dieser Seiten heraus.' });
+    try {
+      const out = await ask(ai, { system: EXTRACT_SYSTEM, parts, schema: ProductSchema });
+      await mkdir(CACHE_DIR, { recursive: true });
+      await writeFile(file, JSON.stringify(out.produkte));
+      results.push(out.produkte);
+    } catch (err) {
+      console.warn(`    Seiten ${batch[0].n}–${batch.at(-1).n}: ${err.message.slice(0, 200)}`);
+      if (isQuota(err)) {
+        quotaHit = true;
+        console.warn('  Kontingent erschöpft – restliche Seiten beim nächsten Lauf');
+      }
+      results.push(null);
+    }
+  }
+
+  const done = results.filter(Boolean).length;
+  console.log(`  Marktkauf-Prospekt: ${done} von ${batches.length} Seitenpaketen ausgewertet${requests ? ` (${requests} neue Anfragen)` : ''}`);
+  return done ? results.filter(Boolean).flat() : null;
 }
 
 /* ---------------- 2. Rezepte der Woche ---------------- */
@@ -252,11 +264,12 @@ async function createRecipes(ai, data) {
 /* ---------------- Hauptprogramm ---------------- */
 
 async function main() {
-  if (!process.env.GEMINI_API_KEY) {
+  if (!process.env.GEMINI_API_KEY && !OFFLINE) {
     console.log('Kein GEMINI_API_KEY gesetzt – KI-Funktionen (Rezepte, Marktkauf-Produkte) übersprungen.');
     return;
   }
-  const ai = createClient(process.env.GEMINI_API_KEY);
+  if (OFFLINE) console.log('Ohne neue Gemini-Anfragen – nur zwischengespeicherte Ergebnisse.');
+  const ai = OFFLINE ? null : createClient(process.env.GEMINI_API_KEY);
   const data = await readJson(DATA_FILE);
   if (!data) {
     console.log('Keine data/prospekte.json – übersprungen.');
@@ -278,10 +291,7 @@ async function main() {
     console.warn(`✗ Rezepte: ${err.message}`);
   }
   // 2. Marktkauf-Produkte aus den Prospektseiten (viele Anfragen)
-  if (process.env.KI_NUR_REZEPTE) {
-    console.log('Nur Rezepte gewünscht – Prospekt-Auswertung übersprungen.');
-    return;
-  }
+  if (NUR_REZEPTE) console.log('Nur Rezepte gewünscht – Prospekt nur aus dem Zwischenspeicher.');
   try {
     const products = await extractMarktkauf(ai);
     if (products?.length && !data.marktkauf?.offers?.offers?.length) {
