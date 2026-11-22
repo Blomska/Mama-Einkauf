@@ -5,6 +5,8 @@
 #   CLOUDFLARE_ACCOUNT_ID  – Cloudflare-Konto-ID
 #   GEMINI_API_KEY         – API-Schlüssel von aistudio.google.com
 #   FAMILY_CODE            – frei gewählter Familien-Code (z. B. "Lüdi2026")
+#
+# Die Namen dürfen auch ohne Unterstriche geschrieben sein (z. B. GEMINIAPIKEY).
 name: Chat-Helfer veröffentlichen
 
 on:
@@ -28,7 +30,7 @@ jobs:
       - name: Prüfen, ob Cloudflare eingerichtet ist
         id: check
         env:
-          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CLOUDFLAREAPITOKEN }}
         run: |
           if [ -n "$CF_TOKEN" ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
@@ -54,13 +56,13 @@ jobs:
         if: steps.check.outputs.ready == 'true'
         uses: cloudflare/wrangler-action@v3
         with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CLOUDFLAREAPITOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLAREACCOUNTID }}
           wranglerVersion: '4.166.0'
           workingDirectory: worker
           secrets: |
             GEMINI_API_KEY
             FAMILY_CODE
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          FAMILY_CODE: ${{ secrets.FAMILY_CODE }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.GEMINIAPIKEY }}
+          FAMILY_CODE: ${{ secrets.FAMILY_CODE || secrets.FAMILYCODE }}
