@@ -166,7 +166,7 @@ export default {
       return { role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text }] };
     });
 
-    const ai = createClient(env.GEMINI_API_KEY);
+    const ai = createClient(env.GEMINI_API_KEY, 25000);
     try {
       const out = await generateJson(ai, {
         system: `${SYSTEM_PROMPT}\n\n${await offersContext(env)}`,
