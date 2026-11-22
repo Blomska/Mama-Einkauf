@@ -11,6 +11,11 @@ on:
     - cron: '17 4 * * *'    # täglich ca. 5–6 Uhr deutscher Zeit
     - cron: '17 15 * * *'   # täglich ca. 16–17 Uhr (Marktkauf-Folgewoche ab Donnerstag)
   workflow_dispatch:        # manuell: Actions → "Run workflow"
+    inputs:
+      nur_rezepte:
+        description: 'Nur Rezepte erstellen (Prospekt-Auswertung überspringen, spart Gemini-Kontingent)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -62,6 +67,7 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.GEMINIAPIKEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          KI_NUR_REZEPTE: ${{ inputs.nur_rezepte && '1' || '' }}
 
       - name: Webseite zusammenstellen
         run: |

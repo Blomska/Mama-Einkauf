@@ -83,7 +83,8 @@ async function ask(ai, { system, parts, schema, maxTokens = 32768 }) {
     contents: [{ role: 'user', parts }],
     schema,
     maxTokens,
-    model: MODEL
+    model: MODEL,
+    maxModels: 7 // kostenloses Kontingent gilt je Modell – mehrere durchprobieren
   });
 }
 
@@ -277,6 +278,10 @@ async function main() {
     console.warn(`✗ Rezepte: ${err.message}`);
   }
   // 2. Marktkauf-Produkte aus den Prospektseiten (viele Anfragen)
+  if (process.env.KI_NUR_REZEPTE) {
+    console.log('Nur Rezepte gewünscht – Prospekt-Auswertung übersprungen.');
+    return;
+  }
   try {
     const products = await extractMarktkauf(ai);
     if (products?.length && !data.marktkauf?.offers?.offers?.length) {
