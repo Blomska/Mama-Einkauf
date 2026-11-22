@@ -1573,67 +1573,135 @@ function onListNames() {
   return new Set(state.items.filter((i) => !i.done).map((i) => normalize(i.name)));
 }
 
-function renderRecipes() {
-  const recipes = state.rezepte?.rezepte || [];
-  if (!recipes.length) {
-    els.recipesSub.textContent = 'Leckere Ideen aus den aktuellen Angeboten.';
-    els.recipes.innerHTML = `
-      <div class="empty-card">
-        <div class="big" aria-hidden="true">🍲</div>
-        <p><strong>Noch keine Rezeptideen für diese Woche.</strong></p>
-        <p>Sie erscheinen hier automatisch, sobald der Rezept-Helfer eingerichtet ist.
-        Bis dahin kannst du einfach den Küchenhelfer fragen.</p>
-        <button type="button" class="btn btn--primary" data-nav="helfer">💬 Küchenhelfer fragen</button>
-      </div>`;
-    return;
-  }
-  const until = state.rezepte.gueltigBis;
-  els.recipesSub.textContent = until && until >= todayIso()
-    ? `Aus den Angeboten bis ${parseIso(until).toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' })} – mit einem Tipp sind die Zutaten auf der Liste.`
-    : 'Ideen aus den Angeboten – mit einem Tipp sind die Zutaten auf der Liste.';
-  const onList = onListNames();
-  state.openRecipes = state.openRecipes || new Set();
+/* ---------- Meine Rezepte (aus dem Küchenhelfer gespeichert) ---------- */
 
-  els.recipes.innerHTML = recipes.map((r, ri) => {
-    const open = state.openRecipes.has(ri);
-    const deals = r.zutaten.filter((z) => z.im_angebot);
-    const ingredients = r.zutaten.map((z, zi) => {
-      const already = onList.has(normalize(z.name));
-      const checked = !z.vorrat && !already;
-      return `
+const MY_RECIPES_LS = 'einkauf:meineRezepte';
+
+function getMyRecipes() {
+  const list = readJSON(MY_RECIPES_LS, []);
+  return Array.isArray(list) ? list : [];
+}
+
+function saveMyRecipe(recipe) {
+  const list = getMyRecipes();
+  const key = normalize(recipe.titel);
+  if (list.some((r) => normalize(r.titel) === key)) {
+    showToast(`„${recipe.titel}“ ist schon in deinen Rezepten ⭐`);
+    return false;
+  }
+  list.unshift({ ...recipe, id: makeId(), gespeichert: Date.now() });
+  writeJSON(MY_RECIPES_LS, list.slice(0, 60));
+  showToast(`⭐ „${recipe.titel}“ ist jetzt in deinen Rezepten`, { label: 'Ansehen', onClick: () => showView('rezepte') });
+  vibrate(15);
+  return true;
+}
+
+function deleteMyRecipe(id) {
+  const list = getMyRecipes();
+  const recipe = list.find((r) => r.id === id);
+  writeJSON(MY_RECIPES_LS, list.filter((r) => r.id !== id));
+  renderRecipes();
+  if (recipe) {
+    showToast(`„${recipe.titel}“ entfernt`, {
+      label: 'Rückgängig',
+      onClick: () => {
+        writeJSON(MY_RECIPES_LS, [recipe, ...getMyRecipes()]);
+        renderRecipes();
+      }
+    });
+  }
+}
+
+/** Rezept anhand seines Schlüssels finden: "w-<index>" (Woche), "m-<id>" (meine), "c-<msg>-<i>" (Chat). */
+function recipeByKey(key) {
+  const [type, a, b] = String(key).split('-');
+  if (type === 'w') return state.rezepte?.rezepte?.[Number(a)] || null;
+  if (type === 'm') return getMyRecipes().find((r) => r.id === key.slice(2)) || null;
+  if (type === 'c') return chat.messages[Number(a)]?.rezepte?.[Number(b)] || null;
+  return null;
+}
+
+/** Eine Rezeptkarte (für Woche, meine Rezepte und Chat). */
+function recipeCardHtml(r, key, { saved = false, inChat = false } = {}) {
+  const open = state.openRecipes.has(key);
+  const onList = onListNames();
+  const zutaten = Array.isArray(r.zutaten) ? r.zutaten : [];
+  const deals = zutaten.filter((z) => z.im_angebot);
+  const ingredients = zutaten.map((z, zi) => {
+    const already = onList.has(normalize(z.name));
+    const checked = !z.vorrat && !already;
+    return `
         <label class="ingr">
-          <input type="checkbox" data-recipe="${ri}" data-ingr="${zi}" ${checked ? 'checked' : ''}>
+          <input type="checkbox" data-recipe="${escapeHtml(key)}" data-ingr="${zi}" ${checked ? 'checked' : ''}>
           <span>${escapeHtml(z.name)}
             ${z.im_angebot ? `<br><span class="ingr__deal">🏷️ ${escapeHtml(STORE_LABELS[z.laden] || '')} ${escapeHtml(z.preis)}</span>` : ''}
             ${already ? '<br><span class="ingr__deal" style="color:var(--primary-dark)">✓ steht schon drauf</span>' : ''}
           </span>
           <span class="ingr__menge">${escapeHtml(z.menge)}${z.vorrat ? '<br><small>(Vorrat)</small>' : ''}</span>
         </label>`;
-    }).join('');
-    return `
-      <article class="recipe">
+  }).join('');
+  const isSaved = saved || getMyRecipes().some((m) => normalize(m.titel) === normalize(r.titel));
+  return `
+      <article class="recipe${inChat ? ' recipe--chat' : ''}">
         <div class="recipe__top">
           <span class="recipe__emoji" aria-hidden="true">${escapeHtml(r.emoji || '🍽️')}</span>
           <div>
             <h3 class="recipe__title">${escapeHtml(r.titel)}</h3>
-            <p class="recipe__meta">⏱ ${r.dauer_minuten} Min · 👥 ${r.portionen} Portionen · ${escapeHtml(r.schwierigkeit)}</p>
+            <p class="recipe__meta">⏱ ${Number(r.dauer_minuten) || '?'} Min · 👥 ${Number(r.portionen) || 4} Portionen · ${escapeHtml(r.schwierigkeit || 'einfach')}</p>
           </div>
         </div>
-        <p class="recipe__desc">${escapeHtml(r.beschreibung)}</p>
+        <p class="recipe__desc">${escapeHtml(r.beschreibung || '')}</p>
         ${deals.length ? `<div class="recipe__deals">${deals.slice(0, 4).map((z) => `<span class="recipe__deal">🏷️ ${escapeHtml(z.name)} ${escapeHtml(z.preis)}</span>`).join('')}</div>` : ''}
-        <button type="button" class="recipe__toggle" data-recipe-toggle="${ri}" aria-expanded="${open}">
+        ${inChat ? `
+        <div class="recipe__save">
+          ${isSaved
+            ? '<span class="recipe__saved">⭐ In deinen Rezepten</span>'
+            : `<button type="button" class="btn btn--primary btn--block" data-recipe-save="${escapeHtml(key)}">⭐ In meine Rezepte</button>`}
+        </div>` : ''}
+        <button type="button" class="recipe__toggle" data-recipe-toggle="${escapeHtml(key)}" aria-expanded="${open}">
           ${open ? 'Rezept zuklappen' : '📖 Zutaten & Zubereitung'} <span aria-hidden="true">${open ? '▴' : '▾'}</span>
         </button>
         ${open ? `
         <div class="recipe__body">
           <h4>Zutaten</h4>
           ${ingredients}
-          <button type="button" class="btn btn--primary btn--block recipe__add" data-recipe-add="${ri}">🛒 Ausgewählte auf die Liste</button>
+          <button type="button" class="btn btn--primary btn--block recipe__add" data-recipe-add="${escapeHtml(key)}">🛒 Ausgewählte auf die Liste</button>
           <h4>Zubereitung</h4>
-          <ol class="steps">${r.schritte.map((st) => `<li>${escapeHtml(st)}</li>`).join('')}</ol>
+          <ol class="steps">${(r.schritte || []).map((st) => `<li>${escapeHtml(st)}</li>`).join('')}</ol>
+          ${saved ? `<button type="button" class="btn btn--ghost-danger recipe__delete" data-recipe-delete="${escapeHtml(r.id)}">🗑️ Aus meinen Rezepten entfernen</button>` : ''}
         </div>` : ''}
       </article>`;
-  }).join('');
+}
+
+function renderRecipes() {
+  const week = state.rezepte?.rezepte || [];
+  const mine = getMyRecipes();
+  const parts = [];
+
+  if (mine.length) {
+    parts.push(`<h3 class="recipes__heading">⭐ Meine Rezepte <span>${mine.length}</span></h3>`);
+    parts.push(...mine.map((r) => recipeCardHtml(r, `m-${r.id}`, { saved: true })));
+  }
+
+  if (week.length) {
+    if (mine.length) parts.push('<h3 class="recipes__heading">🗓️ Ideen der Woche</h3>');
+    parts.push(...week.map((r, ri) => recipeCardHtml(r, `w-${ri}`)));
+  } else {
+    parts.push(`
+      <div class="empty-card">
+        <div class="big" aria-hidden="true">🍲</div>
+        <p><strong>Die Rezeptideen der Woche kommen bald.</strong></p>
+        <p>Sie werden automatisch aus den aktuellen Angeboten erstellt.
+        Frag gern den Küchenhelfer nach einem Rezept – mit „⭐ In meine Rezepte“ landet es hier.</p>
+        <button type="button" class="btn btn--primary" data-nav="helfer">💬 Küchenhelfer fragen</button>
+      </div>`);
+  }
+
+  const until = state.rezepte?.gueltigBis;
+  els.recipesSub.textContent = week.length && until && until >= todayIso()
+    ? `Ideen aus den Angeboten bis ${parseIso(until).toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' })} – mit einem Tipp sind die Zutaten auf der Liste.`
+    : 'Leckere Ideen – mit einem Tipp sind die Zutaten auf der Liste.';
+  els.recipes.innerHTML = parts.join('');
 }
 
 /** Fügt Artikel [{ name, menge, laden }] hinzu – gruppiert nach Laden. */
@@ -1650,18 +1718,51 @@ function addSuggested(items) {
   return added;
 }
 
-function addRecipeIngredients(ri) {
-  const recipe = state.rezepte?.rezepte?.[ri];
+function addRecipeIngredients(key, container) {
+  const recipe = recipeByKey(key);
   if (!recipe) return;
-  const chosen = $$(`input[data-recipe="${ri}"]`, els.recipes)
-    .filter((cb) => cb.checked)
+  const chosen = $$('input[data-recipe]', container)
+    .filter((cb) => cb.dataset.recipe === key && cb.checked)
     .map((cb) => recipe.zutaten[Number(cb.dataset.ingr)]);
   if (!chosen.length) {
     showToast('Bitte mindestens eine Zutat anhaken.');
     return;
   }
   addSuggested(chosen);
-  setTimeout(renderRecipes, 100);
+  setTimeout(() => {
+    if (state.view === 'helfer') renderChat();
+    else renderRecipes();
+  }, 100);
+}
+
+/** Gemeinsame Klicks auf Rezeptkarten (Rezepte-Reiter und Chat). */
+function handleRecipeClick(e, container) {
+  const toggle = e.target.closest('[data-recipe-toggle]');
+  if (toggle) {
+    const key = toggle.dataset.recipeToggle;
+    if (state.openRecipes.has(key)) state.openRecipes.delete(key);
+    else state.openRecipes.add(key);
+    if (container === els.chatLog) renderChat();
+    else renderRecipes();
+    return true;
+  }
+  const add = e.target.closest('[data-recipe-add]');
+  if (add) {
+    addRecipeIngredients(add.dataset.recipeAdd, container);
+    return true;
+  }
+  const save = e.target.closest('[data-recipe-save]');
+  if (save) {
+    const recipe = recipeByKey(save.dataset.recipeSave);
+    if (recipe && saveMyRecipe(recipe)) renderChat();
+    return true;
+  }
+  const del = e.target.closest('[data-recipe-delete]');
+  if (del) {
+    deleteMyRecipe(del.dataset.recipeDelete);
+    return true;
+  }
+  return false;
 }
 
 /* ---------- Küchenhelfer (Chat) ---------- */
@@ -1717,6 +1818,7 @@ function renderChat() {
   const parts = chat.messages.map((m, mi) => {
     if (m.role === 'user') return `<div class="bubble bubble--me">${escapeHtml(m.content)}</div>`;
     let html = `<div class="bubble bubble--bot${m.error ? ' bubble--error' : ''}">${formatBotText(m.content)}</div>`;
+    (m.rezepte || []).forEach((r, ri) => { html += recipeCardHtml(r, `c-${mi}-${ri}`, { inChat: true }); });
     if (m.artikel?.length) {
       html += `
         <div class="suggestion">
@@ -1773,7 +1875,12 @@ async function sendChat(text) {
     } else if (!res.ok) {
       chat.messages.push({ role: 'assistant', content: data.fehler || 'Der Helfer ist gerade nicht erreichbar.', error: true });
     } else {
-      chat.messages.push({ role: 'assistant', content: data.antwort || '', artikel: Array.isArray(data.artikel) ? data.artikel : [] });
+      chat.messages.push({
+        role: 'assistant',
+        content: data.antwort || '',
+        artikel: Array.isArray(data.artikel) ? data.artikel : [],
+        rezepte: Array.isArray(data.rezepte) ? data.rezepte.filter((r) => r && r.titel && Array.isArray(r.zutaten)) : []
+      });
     }
   } catch {
     chat.messages.push({ role: 'assistant', content: 'Keine Verbindung – bist du online? Versuch es gleich nochmal.', error: true });
@@ -2006,18 +2113,7 @@ function bindEvents() {
   });
 
   // Rezepte
-  els.recipes.addEventListener('click', (e) => {
-    const toggle = e.target.closest('[data-recipe-toggle]');
-    if (toggle) {
-      const ri = Number(toggle.dataset.recipeToggle);
-      if (state.openRecipes.has(ri)) state.openRecipes.delete(ri);
-      else state.openRecipes.add(ri);
-      renderRecipes();
-      return;
-    }
-    const add = e.target.closest('[data-recipe-add]');
-    if (add) addRecipeIngredients(Number(add.dataset.recipeAdd));
-  });
+  els.recipes.addEventListener('click', (e) => handleRecipeClick(e, els.recipes));
 
   // Küchenhelfer
   els.chatForm.addEventListener('submit', (e) => {
@@ -2042,6 +2138,7 @@ function bindEvents() {
     if (idea) sendChat(idea.dataset.idea);
   });
   els.chatLog.addEventListener('click', (e) => {
+    if (handleRecipeClick(e, els.chatLog)) return;
     const add = e.target.closest('[data-chat-add]');
     if (add) addChatSuggestion(Number(add.dataset.chatAdd));
     if (e.target.closest('#chatReset')) {

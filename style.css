@@ -1190,3 +1190,11 @@ h1, h2, h3, .btn, .chip, .tab { font-family: var(--font); }
 /* Freude, wenn alles erledigt ist */
 .empty__icon { animation: wiggle 2.4s ease-in-out infinite; display: inline-block; }
 @keyframes wiggle { 0%, 100% { transform: rotate(0); } 10% { transform: rotate(-8deg); } 20% { transform: rotate(6deg); } 30% { transform: rotate(0); } }
+
+/* Rezepte aus dem Küchenhelfer */
+.recipes__heading { display: flex; justify-content: space-between; margin: 8px 4px 0; font-size: 18px; font-weight: 900; }
+.recipes__heading span { color: var(--text-faint); font-weight: 700; font-size: 15px; }
+.recipe--chat { align-self: stretch; border: 2px solid #FFE0CF; }
+.recipe__save { padding: 0 16px 12px; }
+.recipe__saved { display: inline-block; padding: 6px 12px; border-radius: 99px; background: #FFF4D6; color: #8A5A00; font-weight: 800; }
+.recipe__delete { margin-top: 12px; width: 100%; }

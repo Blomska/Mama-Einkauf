@@ -21,13 +21,32 @@ const MAX_MESSAGES = 24;
 const MAX_MESSAGE_CHARS = 2000;
 const RATE_LIMIT_PER_HOUR = 40;
 
+const RecipeSchema = z.object({
+  titel: z.string(),
+  emoji: z.string(),
+  beschreibung: z.string(),
+  portionen: z.number().int(),
+  dauer_minuten: z.number().int(),
+  schwierigkeit: z.enum(['einfach', 'mittel']),
+  zutaten: z.array(z.object({
+    name: z.string(),
+    menge: z.string(),
+    laden: z.enum(['aldi', 'marktkauf', 'egal']),
+    im_angebot: z.boolean(),
+    preis: z.string(),
+    vorrat: z.boolean()
+  })),
+  schritte: z.array(z.string())
+});
+
 const ReplySchema = z.object({
   antwort: z.string(),
   artikel: z.array(z.object({
     name: z.string(),
     menge: z.string(),
     laden: z.enum(['aldi', 'marktkauf', 'egal'])
-  }))
+  })),
+  rezepte: z.array(RecipeSchema)
 });
 
 const SYSTEM_PROMPT = `Du bist der freundliche Einkaufs- und Küchenhelfer in der Einkaufslisten-App einer Familie aus Lüdinghausen (Münsterland). Meistens schreibt dir die Mutter der Familie. Sie kauft bei Marktkauf (Nientied) und Aldi Nord ein.
@@ -43,6 +62,12 @@ Wie du antwortest:
   • Lass weg, was schon auf ihrer Liste steht, und typische Vorräte (Salz, Pfeffer, Öl, Zucker, Mehl), außer sie fragt danach.
 - Wenn sie nur etwas fragt (z. B. ein Rezept oder einen Tipp), antworte einfach – "artikel" darf dann leer sein.
 - Sag in der Antwort nicht, dass du die Artikel "unten" auflistest – die App zeigt sie automatisch als Knöpfe an. Ein kurzer Satz wie "Ich hab dir die Sachen zum Abhaken rausgesucht." reicht.
+- Wenn du ein konkretes Gericht oder einen Kuchen mit Zutaten und Zubereitung vorschlägst (oder sie nach einem Rezept fragt), lege es zusätzlich vollständig in "rezepte" ab (höchstens 2):
+  • "zutaten" mit Mengen für die genannte Personenzahl (sonst 4), "vorrat": true für Salz, Pfeffer, Öl, Mehl, Zucker, Gewürze, Brühe.
+  • "im_angebot"/"preis" nur, wenn die Zutat in den Angeboten dieser Woche steht (Preis wie angegeben), sonst false und "".
+  • "schritte": 4–8 kurze, klare Schritte. "emoji": ein passendes Essens-Emoji.
+  • In "antwort" dann nur kurz beschreiben, was es gibt – nicht die ganze Zubereitung wiederholen. Die App zeigt das Rezept als Karte an, die sie mit „⭐ In meine Rezepte“ speichern kann.
+- Ohne konkretes Rezept bleibt "rezepte" leer.
 - Bleib beim Thema Essen, Einkaufen, Haushalt und Planung. Bei anderem antworte freundlich und kurz.`;
 
 /* ---------------- Hilfsfunktionen ---------------- */
@@ -172,12 +197,12 @@ export default {
         system: `${SYSTEM_PROMPT}\n\n${await offersContext(env)}`,
         contents,
         schema: ReplySchema,
-        maxTokens: 8192,
+        maxTokens: 12000,
         model: env.GEMINI_MODEL || undefined,
         retryDelayMs: 1500,
         maxModels: 3
       });
-      return json({ antwort: out.antwort, artikel: out.artikel.slice(0, 40) }, 200, cors);
+      return json({ antwort: out.antwort, artikel: out.artikel.slice(0, 40), rezepte: out.rezepte.slice(0, 2) }, 200, cors);
     } catch (err) {
       if (err instanceof GeminiBlocked) {
         return json({ antwort: 'Dabei kann ich leider nicht helfen. Frag mich gern etwas anderes rund ums Einkaufen und Kochen! 😊', artikel: [] }, 200, cors);
