@@ -58,6 +58,7 @@ jobs:
         if: github.event_name != 'push'
         run: node scripts/ki-auswertung.mjs
         continue-on-error: true
+        timeout-minutes: 12
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.GEMINIAPIKEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}

@@ -36,6 +36,7 @@ const CACHE_DIR = resolve(ROOT, '.ki-cache');
 const MODEL = process.env.GEMINI_MODEL || undefined; // leer = automatisch
 const PAGES_PER_REQUEST = 6;
 const PAUSE_MS = 8000; // Pause zwischen Anfragen – schont das kostenlose Kontingent
+const EXTRACT_BUDGET_MS = 6 * 60 * 1000; // höchstens 6 Minuten für die Prospekt-Auswertung
 
 // Mamas feste Favoriten (wie in config.js) – fließen in die Rezeptauswahl ein
 const MAMA_FAVORITES = ['Skyr', 'Eier', 'Milch', 'Rinderhack', 'Avocados'];
@@ -138,9 +139,15 @@ async function extractMarktkauf(ai) {
 
     // Nacheinander mit Pause; bei erschöpftem Kontingent sofort aufhören
     let quotaHit = false;
+    const started = Date.now();
     const results = [];
     for (const [bi, batch] of batches.entries()) {
       if (quotaHit) { results.push(null); continue; }
+      if (Date.now() - started > EXTRACT_BUDGET_MS) {
+        console.warn('  Zeitlimit erreicht – restliche Seiten beim nächsten Lauf');
+        results.push(null);
+        continue;
+      }
       if (bi > 0) await new Promise((r) => setTimeout(r, PAUSE_MS));
       results.push(await (async () => {
       const parts = [];
