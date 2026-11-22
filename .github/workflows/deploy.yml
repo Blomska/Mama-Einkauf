@@ -36,9 +36,27 @@ jobs:
         with:
           node-version: 22
 
+      - name: Abhängigkeiten installieren
+        run: npm ci --no-audit --no-fund
+
       - name: Prospekte & Angebote abrufen
         run: node scripts/update-prospekte.mjs
         continue-on-error: true   # bei Ausfall: zuletzt gespeicherte Daten nutzen
+
+      # Zwischenspeicher für KI-Ergebnisse: Claude wird nur gefragt, wenn sich
+      # Prospekt oder Angebote geändert haben (spart Kosten).
+      - name: KI-Zwischenspeicher laden
+        uses: actions/cache@v4
+        with:
+          path: .ki-cache
+          key: ki-cache-${{ github.run_id }}
+          restore-keys: ki-cache-
+
+      - name: KI – Marktkauf-Produkte & Rezepte der Woche
+        run: node scripts/ki-auswertung.mjs
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
       - name: Webseite zusammenstellen
         run: |

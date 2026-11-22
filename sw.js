@@ -13,7 +13,7 @@
  * ------------------------------------------------------------------
  */
 
-const CACHE_VERSION = 'v6';
+const CACHE_VERSION = 'v7';
 const APP_CACHE = `einkauf-app-${CACHE_VERSION}`;
 const CDN_CACHE = 'einkauf-cdn-v1';
 
@@ -73,6 +73,12 @@ self.addEventListener('fetch', (event) => {
 
   // Firebase-SDK von gstatic: Cache zuerst
   if (url.hostname === 'www.gstatic.com' && url.pathname.startsWith('/firebasejs/')) {
+    event.respondWith(cacheFirst(request, CDN_CACHE));
+    return;
+  }
+
+  // Schrift (Google Fonts): Cache zuerst
+  if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {
     event.respondWith(cacheFirst(request, CDN_CACHE));
     return;
   }

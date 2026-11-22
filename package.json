@@ -1,0 +1,14 @@
+{
+  "name": "mama-einkauf",
+  "private": true,
+  "type": "module",
+  "description": "Familien-Einkaufsliste – Hilfsskripte (Prospekte, KI-Rezepte) und Chat-Worker",
+  "scripts": {
+    "prospekte": "node scripts/update-prospekte.mjs",
+    "ki": "node scripts/ki-auswertung.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "1.12.0",
+    "zod": "4.6.7"
+  }
+}

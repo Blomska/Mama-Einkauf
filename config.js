@@ -42,6 +42,16 @@ export const USE_ANONYMOUS_AUTH = true;
  */
 export const MAMA_FAVORITES = ['Skyr', 'Eier', 'Milch', 'Rinderhack', 'Avocados'];
 
+/** So wird oben in der App begrüßt: "Guten Morgen, Mama!" */
+export const GREETING_NAME = 'Mama';
+
+/**
+ * Adresse des Chat-Helfers (Cloudflare Worker, siehe README → "Küchenhelfer").
+ * Leer lassen, solange der Helfer nicht eingerichtet ist.
+ * Beispiel: 'https://mama-einkauf-helfer.DEIN-NAME.workers.dev'
+ */
+export const CHAT_URL = '';
+
 /** Prospekt-Links (öffnen in neuem Tab). */
 export const OFFER_LINKS = {
   // Offizielle EDEKA-Prospektseite von Marktkauf Nientied (EDEKA Markt-ID 10008010)

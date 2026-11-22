@@ -1,0 +1,65 @@
+# Veröffentlicht den Chat-Helfer (worker/) als Cloudflare Worker.
+#
+# Einmalig einrichten (GitHub → Settings → Secrets and variables → Actions):
+#   CLOUDFLARE_API_TOKEN   – Cloudflare-API-Token ("Edit Cloudflare Workers")
+#   CLOUDFLARE_ACCOUNT_ID  – Cloudflare-Konto-ID
+#   ANTHROPIC_API_KEY      – API-Schlüssel von console.anthropic.com
+#   FAMILY_CODE            – frei gewählter Familien-Code (z. B. "Lüdi2026")
+name: Chat-Helfer veröffentlichen
+
+on:
+  push:
+    branches: [main, ccr-a6e722a0-k5p30p]
+    paths:
+      - 'worker/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/chat-helfer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prüfen, ob Cloudflare eingerichtet ist
+        id: check
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -n "$CF_TOKEN" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::CLOUDFLARE_API_TOKEN fehlt – Chat-Helfer wird übersprungen (siehe README)."
+          fi
+
+      - name: Code holen
+        if: steps.check.outputs.ready == 'true'
+        uses: actions/checkout@v4
+
+      - name: Node einrichten
+        if: steps.check.outputs.ready == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Abhängigkeiten installieren
+        if: steps.check.outputs.ready == 'true'
+        run: npm ci --no-audit --no-fund
+
+      - name: Worker veröffentlichen
+        if: steps.check.outputs.ready == 'true'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: '4.166.0'
+          workingDirectory: worker
+          secrets: |
+            ANTHROPIC_API_KEY
+            FAMILY_CODE
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FAMILY_CODE: ${{ secrets.FAMILY_CODE }}

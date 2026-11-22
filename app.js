@@ -35,7 +35,8 @@ import {
   CATEGORIES, CATEGORY_BY_ID, DEFAULT_CATEGORY, categorize, normalize, parseItems, offerMatchScore
 } from './categories.js';
 import {
-  firebaseConfig, LIST_ID, USE_ANONYMOUS_AUTH, OFFER_LINKS, MAMA_FAVORITES, isFirebaseConfigured
+  firebaseConfig, LIST_ID, USE_ANONYMOUS_AUTH, OFFER_LINKS, MAMA_FAVORITES, GREETING_NAME, CHAT_URL,
+  isFirebaseConfigured
 } from './config.js';
 
 /* ================================================================
@@ -369,7 +370,10 @@ const state = {
   flash: new Set(),    // Duplikate hervorheben
   offers: readJSON(LS.offersCache, {}), // { key: { name, store, price, until } }
   offerDraft: {},      // Bearbeitungsstand im Angebots-Dialog
-  prospekte: null      // data/prospekte.json (automatisch abgerufen)
+  prospekte: null,     // data/prospekte.json (automatisch abgerufen)
+  rezepte: null,       // data/rezepte.json (KI-Rezepte der Woche)
+  openRecipes: new Set(),
+  view: 'liste'
 };
 
 const backend = isFirebaseConfigured() ? new FirebaseBackend() : new LocalBackend();
@@ -616,7 +620,20 @@ const els = {
   viewerClose: $('#viewerClose'),
   viewerWeeks: $('#viewerWeeks'),
   viewerTabs: $('#viewerTabs'),
-  viewerBody: $('#viewerBody')
+  viewerBody: $('#viewerBody'),
+  hello: $('#hello'),
+  nav: $('#bottomNav'),
+  navBadgeListe: $('#navBadgeListe'),
+  navBadgeAngebote: $('#navBadgeAngebote'),
+  recipes: $('#recipes'),
+  recipesSub: $('#recipesSub'),
+  chatLog: $('#chatLog'),
+  chatIdeas: $('#chatIdeas'),
+  chatSetup: $('#chatSetup'),
+  chatForm: $('#chatForm'),
+  chatInput: $('#chatInput'),
+  chatMic: $('#chatMic'),
+  chatSend: $('#chatSend')
 };
 
 function itemHtml(item) {
@@ -684,7 +701,7 @@ function render() {
     .filter((g) => g.items.length);
 
   els.list.innerHTML = groups.map(({ cat, items }) => `
-    <section class="group" aria-label="${escapeHtml(cat.name)}">
+    <section class="group" data-cat="${cat.id}" aria-label="${escapeHtml(cat.name)}">
       <h3 class="group__title">
         <span aria-hidden="true">${cat.icon}</span> ${escapeHtml(cat.name)}
         <span class="group__count">${items.length}</span>
@@ -721,6 +738,7 @@ function render() {
   renderProspektCards();
   renderDeals();
   updateGreeting();
+  updateNavBadges(open.length);
   updateDocumentTitle(open.length);
 }
 
@@ -1238,11 +1256,32 @@ function renderFlyer(flyer) {
 
   let content = '';
   if (flyer.pages?.length) {
-    content = `<p class="viewer__count">${flyer.pages.length} Seiten · einfach nach unten wischen</p><div class="pages">${flyer.pages.map((src, i) => `
+    // Produkte je Seite (aus der KI-Auswertung) – antippen = auf die Liste
+    const isCurrent = viewer.week === 'current';
+    const byPage = new Map();
+    if (isCurrent) {
+      storeOffers(viewer.store).filter((o) => o.page).forEach((o) => {
+        if (!byPage.has(o.page)) byPage.set(o.page, []);
+        byPage.get(o.page).push(o);
+      });
+    }
+    const onList = onListNames();
+    content = `<p class="viewer__count">${flyer.pages.length} Seiten · einfach nach unten wischen${byPage.size ? ' · Produkte antippen = auf die Liste' : ''}</p><div class="pages">${flyer.pages.map((src, i) => {
+      const products = byPage.get(i + 1) || [];
+      return `
       <figure class="page">
         <img src="${escapeHtml(src)}" alt="Prospekt Seite ${i + 1}" loading="${i < 2 ? 'eager' : 'lazy'}" decoding="async">
         <figcaption>Seite ${i + 1} von ${flyer.pages.length}</figcaption>
-      </figure>`).join('')}</div>`;
+        ${products.length ? `
+        <div class="page__products">
+          <h4>Von dieser Seite auf die Liste:</h4>
+          <div class="page__chips">${products.map((o) => {
+            const on = onList.has(normalize(o.name));
+            return `<button type="button" class="pchip${on ? ' is-on-list' : ''}" data-add-offer="${escapeHtml(o.id)}">${escapeHtml(o.name)} <b>${escapeHtml(o.price)}</b></button>`;
+          }).join('')}</div>
+        </div>` : ''}
+      </figure>`;
+    }).join('')}</div>`;
   } else if (flyer.cover) {
     content = `
       <a class="cover-link" href="${escapeHtml(isMk ? pageUrl : flyer.viewerUrl)}" target="_blank" rel="noopener noreferrer">
@@ -1327,21 +1366,21 @@ function addOfferToList(id) {
   const offer = storeOffers(viewer.store).find((o) => o.id === id);
   if (!offer) return;
   addParsed([{ name: offer.name, qty: '' }], viewer.store);
-  setTimeout(renderOfferList, 50);
+  if (viewer.tab === 'angebote') setTimeout(renderOfferList, 50);
 }
 
 /* ---------- Spracheingabe ---------- */
 
-const speech = { rec: null, listening: false, base: '' };
-
-function initSpeech() {
+/** Verbindet einen Mikrofon-Knopf mit einem Eingabefeld (Web Speech API). */
+function attachSpeech(button, input, { placeholder, onUpdate, onDone }) {
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!Recognition) return;
-  els.mic.hidden = false;
+  if (!Recognition || !button) return;
+  button.hidden = false;
+  const local = { rec: null, listening: false, base: '' };
 
-  els.mic.addEventListener('click', () => {
-    if (speech.listening) {
-      speech.rec?.stop();
+  button.addEventListener('click', () => {
+    if (local.listening) {
+      local.rec?.stop();
       return;
     }
     const rec = new Recognition();
@@ -1349,20 +1388,19 @@ function initSpeech() {
     rec.interimResults = true;
     rec.continuous = false;
     rec.maxAlternatives = 1;
-    speech.rec = rec;
-    speech.base = els.input.value.trim();
+    local.rec = rec;
+    local.base = input.value.trim();
 
     rec.onstart = () => {
-      speech.listening = true;
-      els.mic.setAttribute('aria-pressed', 'true');
-      els.input.placeholder = 'Ich höre zu … 🎤';
+      local.listening = true;
+      button.setAttribute('aria-pressed', 'true');
+      input.placeholder = 'Ich höre zu … 🎤';
       vibrate(15);
     };
     rec.onresult = (event) => {
       const transcript = Array.from(event.results).map((r) => r[0].transcript).join(' ').trim();
-      els.input.value = speech.base ? `${speech.base}, ${transcript}` : transcript;
-      autoGrow();
-      updateSuggestions();
+      input.value = local.base ? `${local.base}, ${transcript}` : transcript;
+      onUpdate?.();
     };
     rec.onerror = (event) => {
       if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
@@ -1372,19 +1410,35 @@ function initSpeech() {
       }
     };
     rec.onend = () => {
-      speech.listening = false;
-      els.mic.setAttribute('aria-pressed', 'false');
-      els.input.placeholder = 'z. B. Milch, Eier, 500 g Rinderhack';
-      if (els.input.value.trim() && els.input.value.trim() !== speech.base) {
-        els.addBtn.classList.add('is-pulse');
-        setTimeout(() => els.addBtn.classList.remove('is-pulse'), 2400);
-        showToast('Passt das so? Dann auf „Auf die Liste“ tippen. 👍');
-      }
+      local.listening = false;
+      button.setAttribute('aria-pressed', 'false');
+      input.placeholder = placeholder;
+      if (input.value.trim() && input.value.trim() !== local.base) onDone?.();
     };
     try {
       rec.start();
     } catch (err) {
       console.warn('[Sprache]', err);
+    }
+  });
+}
+
+function initSpeech() {
+  attachSpeech(els.mic, els.input, {
+    placeholder: 'z. B. Milch, Eier, 500 g Rinderhack',
+    onUpdate: () => { autoGrow(); updateSuggestions(); },
+    onDone: () => {
+      els.addBtn.classList.add('is-pulse');
+      setTimeout(() => els.addBtn.classList.remove('is-pulse'), 2400);
+      showToast('Passt das so? Dann auf „Auf die Liste“ tippen. 👍');
+    }
+  });
+  attachSpeech(els.chatMic, els.chatInput, {
+    placeholder: 'Deine Frage …',
+    onDone: () => {
+      const text = els.chatInput.value;
+      els.chatInput.value = '';
+      sendChat(text);
     }
   });
 }
@@ -1470,10 +1524,280 @@ function applySuggestion(name) {
 
 function updateGreeting() {
   const h = new Date().getHours();
-  const hello = h < 11 ? 'Guten Morgen! ☀️' : h < 17 ? 'Hallo! 👋' : 'Guten Abend! 🌙';
+  const hello = h < 11 ? 'Guten Morgen' : h < 18 ? 'Hallo' : 'Guten Abend';
+  const icon = h < 11 ? '☀️' : h < 18 ? '🌷' : '🌙';
+  els.hello.textContent = `${hello}${GREETING_NAME ? `, ${GREETING_NAME}` : ''}! ${icon}`;
   const open = state.items.filter((i) => !i.done).length;
-  const sub = open === 0 ? 'Was brauchst du?' : 'Was fehlt noch?';
-  els.greeting.textContent = `${hello} ${sub}`;
+  els.greeting.textContent = open === 0 ? 'Was brauchst du heute?' : 'Was fehlt noch?';
+}
+
+/* ---------- Bereiche & Navigation ---------- */
+
+function showView(name) {
+  if (!document.querySelector(`.view[data-view="${name}"]`)) return;
+  state.view = name;
+  $$('.view').forEach((v) => { v.hidden = v.dataset.view !== name; });
+  $$('[data-nav]', els.nav).forEach((btn) => {
+    const active = btn.dataset.nav === name;
+    btn.classList.toggle('is-active', active);
+    if (active) btn.setAttribute('aria-current', 'page');
+    else btn.removeAttribute('aria-current');
+  });
+  if (name === 'rezepte') renderRecipes();
+  if (name === 'helfer') renderChat();
+  window.scrollTo({ top: 0 });
+  vibrate(8);
+}
+
+function updateNavBadges(openCount) {
+  els.navBadgeListe.hidden = !openCount;
+  els.navBadgeListe.textContent = openCount;
+  const deals = getDeals().filter((d) => !d.onList).length;
+  els.navBadgeAngebote.hidden = !deals;
+  els.navBadgeAngebote.textContent = deals;
+}
+
+/* ---------- Rezepte der Woche ---------- */
+
+async function loadRezepte() {
+  try {
+    const res = await fetch('./data/rezepte.json', { cache: 'no-cache' });
+    state.rezepte = res.ok ? await res.json() : null;
+  } catch {
+    state.rezepte = null;
+  }
+  if (state.view === 'rezepte') renderRecipes();
+}
+
+function onListNames() {
+  return new Set(state.items.filter((i) => !i.done).map((i) => normalize(i.name)));
+}
+
+function renderRecipes() {
+  const recipes = state.rezepte?.rezepte || [];
+  if (!recipes.length) {
+    els.recipesSub.textContent = 'Leckere Ideen aus den aktuellen Angeboten.';
+    els.recipes.innerHTML = `
+      <div class="empty-card">
+        <div class="big" aria-hidden="true">🍲</div>
+        <p><strong>Noch keine Rezeptideen für diese Woche.</strong></p>
+        <p>Sie erscheinen hier automatisch, sobald der Rezept-Helfer eingerichtet ist.
+        Bis dahin kannst du einfach den Küchenhelfer fragen.</p>
+        <button type="button" class="btn btn--primary" data-nav="helfer">💬 Küchenhelfer fragen</button>
+      </div>`;
+    return;
+  }
+  const until = state.rezepte.gueltigBis;
+  els.recipesSub.textContent = until && until >= todayIso()
+    ? `Aus den Angeboten bis ${parseIso(until).toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' })} – mit einem Tipp sind die Zutaten auf der Liste.`
+    : 'Ideen aus den Angeboten – mit einem Tipp sind die Zutaten auf der Liste.';
+  const onList = onListNames();
+  state.openRecipes = state.openRecipes || new Set();
+
+  els.recipes.innerHTML = recipes.map((r, ri) => {
+    const open = state.openRecipes.has(ri);
+    const deals = r.zutaten.filter((z) => z.im_angebot);
+    const ingredients = r.zutaten.map((z, zi) => {
+      const already = onList.has(normalize(z.name));
+      const checked = !z.vorrat && !already;
+      return `
+        <label class="ingr">
+          <input type="checkbox" data-recipe="${ri}" data-ingr="${zi}" ${checked ? 'checked' : ''}>
+          <span>${escapeHtml(z.name)}
+            ${z.im_angebot ? `<br><span class="ingr__deal">🏷️ ${escapeHtml(STORE_LABELS[z.laden] || '')} ${escapeHtml(z.preis)}</span>` : ''}
+            ${already ? '<br><span class="ingr__deal" style="color:var(--primary-dark)">✓ steht schon drauf</span>' : ''}
+          </span>
+          <span class="ingr__menge">${escapeHtml(z.menge)}${z.vorrat ? '<br><small>(Vorrat)</small>' : ''}</span>
+        </label>`;
+    }).join('');
+    return `
+      <article class="recipe">
+        <div class="recipe__top">
+          <span class="recipe__emoji" aria-hidden="true">${escapeHtml(r.emoji || '🍽️')}</span>
+          <div>
+            <h3 class="recipe__title">${escapeHtml(r.titel)}</h3>
+            <p class="recipe__meta">⏱ ${r.dauer_minuten} Min · 👥 ${r.portionen} Portionen · ${escapeHtml(r.schwierigkeit)}</p>
+          </div>
+        </div>
+        <p class="recipe__desc">${escapeHtml(r.beschreibung)}</p>
+        ${deals.length ? `<div class="recipe__deals">${deals.slice(0, 4).map((z) => `<span class="recipe__deal">🏷️ ${escapeHtml(z.name)} ${escapeHtml(z.preis)}</span>`).join('')}</div>` : ''}
+        <button type="button" class="recipe__toggle" data-recipe-toggle="${ri}" aria-expanded="${open}">
+          ${open ? 'Rezept zuklappen' : '📖 Zutaten & Zubereitung'} <span aria-hidden="true">${open ? '▴' : '▾'}</span>
+        </button>
+        ${open ? `
+        <div class="recipe__body">
+          <h4>Zutaten</h4>
+          ${ingredients}
+          <button type="button" class="btn btn--primary btn--block recipe__add" data-recipe-add="${ri}">🛒 Ausgewählte auf die Liste</button>
+          <h4>Zubereitung</h4>
+          <ol class="steps">${r.schritte.map((st) => `<li>${escapeHtml(st)}</li>`).join('')}</ol>
+        </div>` : ''}
+      </article>`;
+  }).join('');
+}
+
+/** Fügt Artikel [{ name, menge, laden }] hinzu – gruppiert nach Laden. */
+function addSuggested(items) {
+  const byStore = { both: [], aldi: [], marktkauf: [] };
+  items.forEach((it) => {
+    const store = it.laden === 'aldi' || it.laden === 'marktkauf' ? it.laden : 'both';
+    byStore[store].push({ name: it.name.charAt(0).toUpperCase() + it.name.slice(1), qty: it.menge || '' });
+  });
+  let added = false;
+  for (const [store, list] of Object.entries(byStore)) {
+    if (list.length) added = addParsed(list, store) || added;
+  }
+  return added;
+}
+
+function addRecipeIngredients(ri) {
+  const recipe = state.rezepte?.rezepte?.[ri];
+  if (!recipe) return;
+  const chosen = $$(`input[data-recipe="${ri}"]`, els.recipes)
+    .filter((cb) => cb.checked)
+    .map((cb) => recipe.zutaten[Number(cb.dataset.ingr)]);
+  if (!chosen.length) {
+    showToast('Bitte mindestens eine Zutat anhaken.');
+    return;
+  }
+  addSuggested(chosen);
+  setTimeout(renderRecipes, 100);
+}
+
+/* ---------- Küchenhelfer (Chat) ---------- */
+
+const CHAT_LS = 'einkauf:chat';
+const CODE_LS = 'einkauf:familiencode';
+const chat = { messages: readJSON(CHAT_LS, []), busy: false, needsCode: false };
+
+function saveChat() {
+  chat.messages = chat.messages.slice(-30);
+  writeJSON(CHAT_LS, chat.messages.filter((m) => !m.error));
+}
+
+/** Sehr einfache, sichere Formatierung: **fett** und Zeilenumbrüche. */
+function formatBotText(text) {
+  return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+}
+
+function renderChat() {
+  // Einrichtung
+  if (!CHAT_URL) {
+    els.chatSetup.hidden = false;
+    els.chatSetup.innerHTML = `
+      <div class="empty-card">
+        <div class="big" aria-hidden="true">🧑‍🍳</div>
+        <p><strong>Der Küchenhelfer ist noch nicht eingerichtet.</strong></p>
+        <p>Kai muss ihn einmal freischalten (Anleitung in der README). Danach kannst du hier alles rund ums Einkaufen und Kochen fragen.</p>
+      </div>`;
+    els.chatForm.hidden = true;
+    els.chatIdeas.hidden = true;
+    els.chatLog.innerHTML = '';
+    return;
+  }
+  if (chat.needsCode || !readJSON(CODE_LS, '')) {
+    els.chatSetup.hidden = false;
+    els.chatSetup.innerHTML = `
+      <div class="empty-card">
+        <div class="big" aria-hidden="true">🔑</div>
+        <p><strong>Einmal den Familien-Code eingeben</strong></p>
+        <p>Den Code bekommst du von Kai. Danach merkt sich das Handy ihn.</p>
+        <input type="text" id="familyCode" autocomplete="off" placeholder="Familien-Code" aria-label="Familien-Code">
+        <button type="button" class="btn btn--primary btn--block" id="familyCodeSave">Speichern</button>
+      </div>`;
+    els.chatForm.hidden = true;
+    els.chatIdeas.hidden = true;
+    return;
+  }
+  els.chatSetup.hidden = true;
+  els.chatForm.hidden = false;
+  els.chatIdeas.hidden = chat.messages.length > 0;
+
+  const onList = onListNames();
+  const parts = chat.messages.map((m, mi) => {
+    if (m.role === 'user') return `<div class="bubble bubble--me">${escapeHtml(m.content)}</div>`;
+    let html = `<div class="bubble bubble--bot${m.error ? ' bubble--error' : ''}">${formatBotText(m.content)}</div>`;
+    if (m.artikel?.length) {
+      html += `
+        <div class="suggestion">
+          <h4>🛒 Vorschlag für deine Liste</h4>
+          ${m.artikel.map((a, ai) => {
+            const already = onList.has(normalize(a.name));
+            return `
+              <label class="ingr">
+                <input type="checkbox" data-chat-msg="${mi}" data-chat-item="${ai}" ${already || m.added ? '' : 'checked'} ${m.added ? 'disabled' : ''}>
+                <span>${escapeHtml(a.name)}
+                  ${a.laden !== 'egal' ? `<br><span class="ingr__deal">🏷️ ${escapeHtml(STORE_LABELS[a.laden])}</span>` : ''}
+                  ${already ? '<br><span class="ingr__deal" style="color:var(--primary-dark)">✓ steht schon drauf</span>' : ''}
+                </span>
+                <span class="ingr__menge">${escapeHtml(a.menge)}</span>
+              </label>`;
+          }).join('')}
+          ${m.added
+            ? '<p style="margin:10px 0 0;font-weight:800;color:var(--primary-dark)">✓ Ist auf der Liste</p>'
+            : `<button type="button" class="btn btn--primary btn--block" data-chat-add="${mi}">🛒 Ausgewählte auf die Liste</button>`}
+        </div>`;
+    }
+    return html;
+  });
+  if (chat.busy) parts.push('<div class="bubble bubble--bot bubble--typing">Ich überlege kurz … 🍳</div>');
+  if (chat.messages.length && !chat.busy) {
+    parts.push('<button type="button" class="btn btn--ghost" id="chatReset" style="align-self:center">🧹 Neues Gespräch</button>');
+  }
+  els.chatLog.innerHTML = parts.join('');
+  els.chatSend.disabled = chat.busy;
+}
+
+async function sendChat(text) {
+  const question = String(text || '').trim();
+  if (!question || chat.busy || !CHAT_URL) return;
+  chat.messages.push({ role: 'user', content: question });
+  chat.busy = true;
+  saveChat();
+  renderChat();
+  els.chatLog.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+
+  const history = chat.messages.filter((m) => !m.error).slice(-16).map((m) => ({ role: m.role, content: m.content }));
+  const liste = state.items.filter((i) => !i.done).map((i) => `${i.qty ? `${i.qty} ` : ''}${i.name}`);
+  try {
+    const res = await fetch(`${CHAT_URL.replace(/\/$/, '')}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Familien-Code': readJSON(CODE_LS, '') },
+      body: JSON.stringify({ messages: history, liste })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401) {
+      chat.needsCode = true;
+      chat.messages.pop();
+      showToast('Der Familien-Code stimmt nicht – bitte nochmal eingeben.');
+    } else if (!res.ok) {
+      chat.messages.push({ role: 'assistant', content: data.fehler || 'Der Helfer ist gerade nicht erreichbar.', error: true });
+    } else {
+      chat.messages.push({ role: 'assistant', content: data.antwort || '', artikel: Array.isArray(data.artikel) ? data.artikel : [] });
+    }
+  } catch {
+    chat.messages.push({ role: 'assistant', content: 'Keine Verbindung – bist du online? Versuch es gleich nochmal.', error: true });
+  }
+  chat.busy = false;
+  saveChat();
+  renderChat();
+  els.chatLog.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
+function addChatSuggestion(mi) {
+  const msg = chat.messages[mi];
+  if (!msg?.artikel) return;
+  const chosen = $$(`input[data-chat-msg="${mi}"]`, els.chatLog)
+    .filter((cb) => cb.checked)
+    .map((cb) => msg.artikel[Number(cb.dataset.chatItem)]);
+  if (!chosen.length) {
+    showToast('Bitte mindestens eine Sache anhaken.');
+    return;
+  }
+  addSuggested(chosen);
+  msg.added = true;
+  saveChat();
+  renderChat();
 }
 
 /* ---------- WhatsApp teilen ---------- */
@@ -1675,6 +1999,67 @@ function bindEvents() {
   // Teilen
   els.share.addEventListener('click', shareViaWhatsApp);
 
+  // Navigation (unten + Knöpfe mit data-nav im Inhalt)
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-nav]');
+    if (btn) showView(btn.dataset.nav);
+  });
+
+  // Rezepte
+  els.recipes.addEventListener('click', (e) => {
+    const toggle = e.target.closest('[data-recipe-toggle]');
+    if (toggle) {
+      const ri = Number(toggle.dataset.recipeToggle);
+      if (state.openRecipes.has(ri)) state.openRecipes.delete(ri);
+      else state.openRecipes.add(ri);
+      renderRecipes();
+      return;
+    }
+    const add = e.target.closest('[data-recipe-add]');
+    if (add) addRecipeIngredients(Number(add.dataset.recipeAdd));
+  });
+
+  // Küchenhelfer
+  els.chatForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = els.chatInput.value;
+    els.chatInput.value = '';
+    els.chatInput.style.height = '';
+    sendChat(text);
+  });
+  els.chatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      els.chatForm.requestSubmit();
+    }
+  });
+  els.chatInput.addEventListener('input', () => {
+    els.chatInput.style.height = 'auto';
+    els.chatInput.style.height = `${Math.min(els.chatInput.scrollHeight, 140)}px`;
+  });
+  els.chatIdeas.addEventListener('click', (e) => {
+    const idea = e.target.closest('[data-idea]');
+    if (idea) sendChat(idea.dataset.idea);
+  });
+  els.chatLog.addEventListener('click', (e) => {
+    const add = e.target.closest('[data-chat-add]');
+    if (add) addChatSuggestion(Number(add.dataset.chatAdd));
+    if (e.target.closest('#chatReset')) {
+      chat.messages = [];
+      saveChat();
+      renderChat();
+    }
+  });
+  els.chatSetup.addEventListener('click', (e) => {
+    if (!e.target.closest('#familyCodeSave')) return;
+    const code = $('#familyCode', els.chatSetup)?.value.trim();
+    if (!code) return;
+    writeJSON(CODE_LS, code);
+    chat.needsCode = false;
+    renderChat();
+    showToast('Gespeichert – jetzt kannst du loslegen! 😊');
+  });
+
   // Prospekte & Angebote
   $$('[data-open-prospekt]').forEach((btn) => {
     btn.addEventListener('click', () => openProspekt(btn.dataset.openProspekt));
@@ -1710,7 +2095,9 @@ function bindEvents() {
   });
   els.viewerBody.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-add-offer]');
-    if (btn && btn.textContent.trim() !== '✓') addOfferToList(btn.dataset.addOffer);
+    if (!btn || btn.classList.contains('is-on-list') || btn.textContent.trim() === '✓') return;
+    addOfferToList(btn.dataset.addOffer);
+    if (btn.classList.contains('pchip')) btn.classList.add('is-on-list');
   });
 
   // Angebote markieren
@@ -1784,6 +2171,7 @@ function bindEvents() {
 function init() {
   // Prospekt-Links
   loadProspekte();
+  loadRezepte();
   updateGreeting();
 
   buildCategoryGrid();

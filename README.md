@@ -28,7 +28,9 @@ Ohne Login, mit Echtzeit-Abgleich für die ganze Familie, installierbar als App 
 | `config.js` | **Hier tragen Sie die Firebase-Config ein**, außerdem Listen-Name und Prospekt-Links |
 | `manifest.json`, `sw.js`, `icons/` | PWA (Startbildschirm, Offline) |
 | `scripts/update-prospekte.mjs` | Holt Prospekte und Angebote nach `data/prospekte.json` |
-| `.github/workflows/deploy.yml` | Ruft die Prospekte täglich ab und veröffentlicht die App |
+| `.github/workflows/deploy.yml` | Ruft die Prospekte täglich ab, startet die KI-Auswertung und veröffentlicht die App |
+| `scripts/ki-auswertung.mjs` | Claude: Marktkauf-Produkte aus dem Prospekt + Rezepte der Woche |
+| `worker/` + `.github/workflows/chat-helfer.yml` | Küchenhelfer (Chat) als Cloudflare Worker |
 
 > Solange in `config.js` noch die Platzhalter stehen, läuft die App im **Demo-Modus**. Dann funktioniert alles, die Liste wird aber nur auf dem jeweiligen Gerät gespeichert.
 
@@ -126,6 +128,43 @@ Der GitHub-Workflow startet `scripts/update-prospekte.mjs`. Das Skript liest die
 - Fällt eine Quelle aus, bleiben die zuletzt gespeicherten Daten erhalten.
 - Ändern die Shops ihre Webseiten, muss eventuell das Skript angepasst werden. Die App funktioniert in diesem Fall trotzdem weiter, nur ohne neue Prospekte.
 - Lokal testen: `node scripts/update-prospekte.mjs` (Node 18+).
+
+## KI-Funktionen: Rezepte, Marktkauf-Produkte & Küchenhelfer (optional)
+
+Alle drei Funktionen nutzen Claude von Anthropic. Ohne Einrichtung läuft die App ganz normal weiter. Die KI-Teile bleiben dann einfach leer.
+
+| Funktion | Was passiert | Wo es läuft |
+|---|---|---|
+| **Marktkauf-Produkte antippen** | Claude liest einmal pro Woche den Marktkauf-Prospekt und schreibt alle Produkte mit Preis und Seite heraus. Unter jeder Prospektseite kann Mama sie antippen. | GitHub-Workflow (`scripts/ki-auswertung.mjs`) |
+| **Rezepte der Woche** | 5 Familienrezepte aus den aktuellen Angeboten. Die Zutaten landen mit einem Tipp auf der Liste. | GitHub-Workflow |
+| **Küchenhelfer (Chat)** | Mama fragt z. B. „Dienstag 4 Leute zum Frühstück, was brauche ich?“. Der Helfer schlägt Artikel zum Übernehmen vor. | Cloudflare Worker (`worker/`) |
+
+### A. API-Schlüssel besorgen (für alles)
+1. Melden Sie sich auf <https://console.anthropic.com> an, legen Sie unter **Billing** Guthaben an (z. B. 5 €) und setzen Sie am besten ein **monatliches Limit** (Settings → Limits).
+2. Unter **API Keys → Create Key** einen Schlüssel erstellen und kopieren.
+3. Tragen Sie den Schlüssel auf GitHub ein: **Repository → Settings → Secrets and variables → Actions → New repository secret**, mit dem Namen `ANTHROPIC_API_KEY`.
+
+Damit funktionieren **Rezepte und Marktkauf-Produkte** ab dem nächsten Workflow-Lauf. Zum Sofort-Testen starten Sie unter **Actions → „Prospekte aktualisieren & veröffentlichen“ → Run workflow**.
+
+### B. Küchenhelfer freischalten (Chat)
+Der Chat braucht einen kleinen Server, weil der API-Schlüssel nie in der App stehen darf. Dafür eignet sich ein kostenloser **Cloudflare Worker**:
+
+1. Konto auf <https://dash.cloudflare.com> anlegen (kostenlos).
+2. **Konto-ID**: Sie steht im Dashboard rechts unter „Account ID“.
+3. **API-Token**: Gehen Sie auf **My Profile → API Tokens → Create Token** und wählen Sie die Vorlage **„Edit Cloudflare Workers“**.
+4. Legen Sie auf GitHub drei weitere Secrets an:
+   - `CLOUDFLARE_API_TOKEN` (das Token aus Schritt 3)
+   - `CLOUDFLARE_ACCOUNT_ID` (die ID aus Schritt 2)
+   - `FAMILY_CODE`: ein frei gewählter Familien-Code (z. B. `Lüdi2026`). Mama gibt ihn einmal im Helfer ein, danach merkt sich das Handy ihn. Er schützt vor fremder Nutzung und Kosten.
+5. Starten Sie unter **Actions → „Chat-Helfer veröffentlichen“ → Run workflow**. Im Protokoll steht am Ende die Adresse, z. B. `https://mama-einkauf-helfer.<name>.workers.dev`.
+6. Tragen Sie diese Adresse in `config.js` bei `CHAT_URL` ein und committen Sie die Änderung. Fertig!
+
+### Kosten (Richtwerte)
+- Prospekt lesen + Rezepte: ca. **0,30–0,60 € pro Woche** (nur wenn sich Prospekt oder Angebote ändern, Ergebnisse werden zwischengespeichert).
+- Chat: ca. **1–3 Cent pro Frage**.
+- Cloudflare Worker: kostenlos (bis 100.000 Anfragen pro Tag).
+
+Modell: `claude-opus-5-5`. Ist eine Anfrage von den Sicherheitsfiltern betroffen, springt automatisch ein Ersatzmodell ein (Server-Fallback).
 
 ## Lokal testen
 

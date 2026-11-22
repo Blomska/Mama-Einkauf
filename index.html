@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Einkaufsliste</title>
   <meta name="description" content="Unsere Familien-Einkaufsliste für Marktkauf und Aldi in Lüdinghausen.">
-  <meta name="theme-color" content="#0F766E">
+  <meta name="theme-color" content="#FFF1E6">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -14,6 +14,9 @@
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="icon" href="icons/icon-192.png" type="image/png" sizes="192x192">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap">
   <link rel="stylesheet" href="style.css">
   <script type="module" src="app.js"></script>
 </head>
@@ -21,27 +24,30 @@
   <div class="app">
     <!-- Kopfzeile -->
     <header class="topbar">
-      <div class="topbar__title">
-        <span class="topbar__logo" aria-hidden="true">🛒</span>
-        <div>
-          <h1>Einkaufsliste</h1>
+      <div class="topbar__deko" aria-hidden="true">🍎 🥕 🥖 🧀 🍓 🥦</div>
+      <div class="topbar__row">
+        <div class="topbar__title">
+          <p class="topbar__hello" id="hello">Hallo!</p>
+          <h1>Unsere Einkaufsliste</h1>
           <p class="sync" id="syncStatus" role="status" aria-live="polite">
             <span class="sync__dot"></span><span class="sync__text">Verbinde …</span>
           </p>
         </div>
+        <button class="wake" id="wakeToggle" type="button" aria-pressed="false" hidden
+                title="Verhindert, dass das Display beim Einkaufen ausgeht">
+          <span class="wake__icon" aria-hidden="true">💡</span>
+          <span class="wake__label">Display<br>anlassen</span>
+        </button>
       </div>
-      <button class="wake" id="wakeToggle" type="button" aria-pressed="false" hidden
-              title="Verhindert, dass das Display beim Einkaufen ausgeht">
-        <span class="wake__icon" aria-hidden="true">💡</span>
-        <span class="wake__label">Display<br>anlassen</span>
-      </button>
     </header>
 
     <main>
+      <!-- ============ Ansicht: Liste ============ -->
+      <section class="view" data-view="liste" aria-label="Einkaufsliste">
       <!-- Eingabe -->
       <section class="card composer" aria-label="Artikel hinzufügen">
         <form id="addForm" autocomplete="off">
-          <p class="greeting" id="greeting">Hallo! 👋 Was brauchst du?</p>
+          <p class="greeting" id="greeting">Was brauchst du?</p>
           <label for="itemInput" class="visually-hidden">Was wird gebraucht?</label>
           <div class="composer__row">
             <textarea id="itemInput" rows="1" enterkeyhint="done"
@@ -69,36 +75,6 @@
           <h2 class="section-label">Oft gekauft – einfach antippen</h2>
           <div class="chips chips--fav" id="favorites"></div>
         </div>
-      </section>
-
-      <!-- Prospekte & Angebote -->
-      <section class="prospekte" aria-label="Prospekte und Angebote in Lüdinghausen">
-        <h2 class="section-label">Prospekte & Angebote · Lüdinghausen</h2>
-        <div class="pcards">
-          <button type="button" class="pcard pcard--marktkauf" data-open-prospekt="marktkauf">
-            <span class="pcard__cover"><img id="coverMarktkauf" alt="" loading="lazy" hidden><span class="pcard__logo">MK</span></span>
-            <span class="pcard__body">
-              <strong>Marktkauf</strong>
-              <small id="validMarktkauf">Prospekt ansehen</small>
-            </span>
-          </button>
-          <button type="button" class="pcard pcard--aldi" data-open-prospekt="aldi">
-            <span class="pcard__cover"><img id="coverAldi" alt="" loading="lazy" hidden><span class="pcard__logo">A</span></span>
-            <span class="pcard__body">
-              <strong>Aldi Nord</strong>
-              <small id="validAldi">Prospekt ansehen</small>
-            </span>
-          </button>
-        </div>
-
-        <div class="deals" id="dealsWrap" hidden>
-          <h3 class="deals__title">🏷️ Deine Sachen im Angebot</h3>
-          <div class="deals__row" id="deals"></div>
-        </div>
-
-        <button type="button" class="offer-manage" id="offerManageBtn">
-          🏷️ Angebot selbst markieren
-        </button>
       </section>
 
       <!-- Laden-Filter -->
@@ -143,10 +119,98 @@
         </button>
       </div>
 
+      </section>
+
+      <!-- ============ Ansicht: Angebote ============ -->
+      <section class="view" data-view="angebote" aria-label="Angebote" hidden>
+      <!-- Prospekte & Angebote -->
+      <div class="prospekte" aria-label="Prospekte und Angebote in Lüdinghausen">
+        <h2 class="view__title">Prospekte & Angebote</h2>
+        <p class="view__sub">Marktkauf Nientied & Aldi Nord in Lüdinghausen – jede Woche automatisch neu.</p>
+        <div class="pcards">
+          <button type="button" class="pcard pcard--marktkauf" data-open-prospekt="marktkauf">
+            <span class="pcard__cover"><img id="coverMarktkauf" alt="" loading="lazy" hidden><span class="pcard__logo">MK</span></span>
+            <span class="pcard__body">
+              <strong>Marktkauf</strong>
+              <small id="validMarktkauf">Prospekt ansehen</small>
+            </span>
+          </button>
+          <button type="button" class="pcard pcard--aldi" data-open-prospekt="aldi">
+            <span class="pcard__cover"><img id="coverAldi" alt="" loading="lazy" hidden><span class="pcard__logo">A</span></span>
+            <span class="pcard__body">
+              <strong>Aldi Nord</strong>
+              <small id="validAldi">Prospekt ansehen</small>
+            </span>
+          </button>
+        </div>
+
+        <div class="deals" id="dealsWrap" hidden>
+          <h3 class="deals__title">🏷️ Deine Sachen im Angebot</h3>
+          <div class="deals__row" id="deals"></div>
+        </div>
+
+        <button type="button" class="offer-manage" id="offerManageBtn">
+          🏷️ Angebot selbst markieren
+        </button>
+      </div>
+
+      </section>
+
+      <!-- ============ Ansicht: Rezepte ============ -->
+      <section class="view" data-view="rezepte" aria-label="Rezepte" hidden>
+        <h2 class="view__title">Rezeptideen der Woche</h2>
+        <p class="view__sub" id="recipesSub">Leckere Ideen aus den aktuellen Angeboten.</p>
+        <div id="recipes" class="recipes"></div>
+      </section>
+
+      <!-- ============ Ansicht: Helfer (Chat) ============ -->
+      <section class="view view--chat" data-view="helfer" aria-label="Küchenhelfer" hidden>
+        <div class="chat__head">
+          <span class="chat__avatar" aria-hidden="true">👩‍🍳</span>
+          <div>
+            <h2 class="view__title">Dein Küchenhelfer</h2>
+            <p class="view__sub">Frag einfach – z. B. was du für ein Frühstück mit Besuch brauchst.</p>
+          </div>
+        </div>
+        <div class="chat__log" id="chatLog" aria-live="polite"></div>
+        <div class="chat__ideas" id="chatIdeas">
+          <button type="button" class="idea" data-idea="Ich habe Dienstag 4 Leute zum Frühstück. Was brauche ich?">🥐 Frühstück für 4</button>
+          <button type="button" class="idea" data-idea="Was kann ich diese Woche günstig kochen? Bitte mit den Angeboten.">💶 Günstig kochen</button>
+          <button type="button" class="idea" data-idea="Ich möchte am Sonntag einen einfachen Kuchen backen. Was brauche ich?">🍰 Sonntagskuchen</button>
+          <button type="button" class="idea" data-idea="Wir grillen am Wochenende mit 6 Personen. Was soll ich einkaufen?">🔥 Grillen mit 6</button>
+        </div>
+        <div class="chat__setup" id="chatSetup" hidden></div>
+        <form class="chat__composer" id="chatForm" autocomplete="off">
+          <textarea id="chatInput" rows="1" placeholder="Deine Frage …" aria-label="Frage an den Küchenhelfer"></textarea>
+          <button type="button" class="mic mic--small" id="chatMic" aria-label="Einsprechen" aria-pressed="false" hidden>
+            <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M12 15a3.5 3.5 0 0 0 3.5-3.5v-6a3.5 3.5 0 1 0-7 0v6A3.5 3.5 0 0 0 12 15zm6-3.5a1 1 0 1 0-2 0 4 4 0 0 1-8 0 1 1 0 1 0-2 0 6 6 0 0 0 5 5.91V20H8.5a1 1 0 1 0 0 2h7a1 1 0 1 0 0-2H13v-2.59a6 6 0 0 0 5-5.91z"/></svg>
+          </button>
+          <button type="submit" class="chat__send" id="chatSend" aria-label="Senden">➤</button>
+        </form>
+      </section>
+
       <footer class="foot">
         <p id="modeInfo"></p>
       </footer>
     </main>
+
+    <!-- Navigation unten -->
+    <nav class="bottomnav" id="bottomNav" aria-label="Bereiche">
+      <button type="button" class="bottomnav__btn is-active" data-nav="liste" aria-current="page">
+        <span class="bottomnav__icon" aria-hidden="true">🛒</span><span>Liste</span>
+        <span class="bottomnav__badge" id="navBadgeListe" hidden></span>
+      </button>
+      <button type="button" class="bottomnav__btn" data-nav="angebote">
+        <span class="bottomnav__icon" aria-hidden="true">🏷️</span><span>Angebote</span>
+        <span class="bottomnav__badge bottomnav__badge--deal" id="navBadgeAngebote" hidden></span>
+      </button>
+      <button type="button" class="bottomnav__btn" data-nav="rezepte">
+        <span class="bottomnav__icon" aria-hidden="true">🍲</span><span>Rezepte</span>
+      </button>
+      <button type="button" class="bottomnav__btn" data-nav="helfer">
+        <span class="bottomnav__icon" aria-hidden="true">💬</span><span>Helfer</span>
+      </button>
+    </nav>
   </div>
 
   <!-- Bearbeiten-Dialog -->
