@@ -25,7 +25,7 @@ import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as z from 'zod';
-import { createClient, generateJson } from '../lib/gemini.mjs';
+import { createClient, generateJson, isQuota } from '../lib/gemini.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DATA_FILE = resolve(ROOT, 'data/prospekte.json');
@@ -34,8 +34,8 @@ const PAGES_DIR = resolve(ROOT, 'data/mk-seiten');
 const CACHE_DIR = resolve(ROOT, '.ki-cache');
 
 const MODEL = process.env.GEMINI_MODEL || undefined; // leer = automatisch
-const PAGES_PER_REQUEST = 5;
-const PARALLEL_REQUESTS = 2; // schont die Ratenlimits des kostenlosen Kontingents
+const PAGES_PER_REQUEST = 6;
+const PAUSE_MS = 8000; // Pause zwischen Anfragen – schont das kostenlose Kontingent
 
 // Mamas feste Favoriten (wie in config.js) – fließen in die Rezeptauswahl ein
 const MAMA_FAVORITES = ['Skyr', 'Eier', 'Milch', 'Rinderhack', 'Avocados'];
@@ -73,20 +73,6 @@ async function cached(name, hash, compute) {
   await mkdir(CACHE_DIR, { recursive: true });
   await writeFile(file, JSON.stringify(value));
   return value;
-}
-
-/** Führt async-Funktionen mit begrenzter Parallelität aus. */
-async function pool(tasks, limit) {
-  const results = new Array(tasks.length);
-  let next = 0;
-  const worker = async () => {
-    while (next < tasks.length) {
-      const i = next++;
-      results[i] = await tasks[i]();
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
-  return results;
 }
 
 /** Ein Gemini-Aufruf mit strukturierter Ausgabe (Zod-Schema). */
@@ -150,7 +136,13 @@ async function extractMarktkauf(ai) {
     const batches = [];
     for (let i = 0; i < images.length; i += PAGES_PER_REQUEST) batches.push(images.slice(i, i + PAGES_PER_REQUEST));
 
-    const results = await pool(batches.map((batch) => async () => {
+    // Nacheinander mit Pause; bei erschöpftem Kontingent sofort aufhören
+    let quotaHit = false;
+    const results = [];
+    for (const [bi, batch] of batches.entries()) {
+      if (quotaHit) { results.push(null); continue; }
+      if (bi > 0) await new Promise((r) => setTimeout(r, PAUSE_MS));
+      results.push(await (async () => {
       const parts = [];
       for (const img of batch) {
         parts.push({ text: `Seite ${img.n}:` });
@@ -162,9 +154,14 @@ async function extractMarktkauf(ai) {
         return out.produkte;
       } catch (err) {
         console.warn(`    Seiten ${batch[0].n}–${batch.at(-1).n}: ${err.message}`);
+        if (isQuota(err)) {
+          quotaHit = true;
+          console.warn('  Kontingent erschöpft – Prospekt-Auswertung wird beim nächsten Lauf fortgesetzt');
+        }
         return null;
       }
-    }), PARALLEL_REQUESTS);
+      })());
+    }
 
     const failed = results.filter((r) => r === null).length;
     const products = results.filter(Boolean).flat();
@@ -258,7 +255,21 @@ async function main() {
     return;
   }
 
-  // 1. Marktkauf-Produkte aus den Prospektseiten
+  // 1. Rezepte (nur eine Anfrage – zuerst, damit sie sicher entstehen)
+  try {
+    const recipes = await createRecipes(ai, data);
+    if (recipes) {
+      const week = {
+        ...recipes,
+        gueltigBis: data.aldi?.current?.validTo || data.marktkauf?.current?.validTo || null
+      };
+      await writeFile(REZEPTE_FILE, `${JSON.stringify(week, null, 1)}\n`);
+      console.log(`✓ ${recipes.rezepte.length} Rezepte der Woche`);
+    }
+  } catch (err) {
+    console.warn(`✗ Rezepte: ${err.message}`);
+  }
+  // 2. Marktkauf-Produkte aus den Prospektseiten (viele Anfragen)
   try {
     const products = await extractMarktkauf(ai);
     if (products?.length && !data.marktkauf?.offers?.offers?.length) {
@@ -287,20 +298,7 @@ async function main() {
     console.warn(`✗ Marktkauf-Produkte: ${err.message}`);
   }
 
-  // 2. Rezepte
-  try {
-    const recipes = await createRecipes(ai, data);
-    if (recipes) {
-      const week = {
-        ...recipes,
-        gueltigBis: data.aldi?.current?.validTo || data.marktkauf?.current?.validTo || null
-      };
-      await writeFile(REZEPTE_FILE, `${JSON.stringify(week, null, 1)}\n`);
-      console.log(`✓ ${recipes.rezepte.length} Rezepte der Woche`);
-    }
-  } catch (err) {
-    console.warn(`✗ Rezepte: ${err.message}`);
-  }
+
 }
 
 main().catch((err) => {
