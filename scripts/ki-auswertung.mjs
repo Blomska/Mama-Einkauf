@@ -58,13 +58,18 @@ async function readJson(file, fallback = null) {
 }
 
 async function cached(name, hash, compute) {
-  const file = resolve(CACHE_DIR, `${name}-${hash}.json`);
+  const file = resolve(CACHE_DIR, `${name}-v2-${hash}.json`);
   const hit = await readJson(file);
   if (hit) {
     console.log(`  ↺ ${name}: aus dem Zwischenspeicher (keine neuen Kosten)`);
     return hit;
   }
   const value = await compute();
+  // Unvollständige Ergebnisse nicht speichern – beim nächsten Lauf neu versuchen
+  if (value && value.unvollstaendig) {
+    console.warn(`  ${name}: unvollständig – wird beim nächsten Lauf erneut versucht`);
+    return value;
+  }
   await mkdir(CACHE_DIR, { recursive: true });
   await writeFile(file, JSON.stringify(value));
   return value;
@@ -157,11 +162,17 @@ async function extractMarktkauf(ai) {
         return out.produkte;
       } catch (err) {
         console.warn(`    Seiten ${batch[0].n}–${batch.at(-1).n}: ${err.message}`);
-        return [];
+        return null;
       }
     }), PARALLEL_REQUESTS);
 
-    return results.flat();
+    const failed = results.filter((r) => r === null).length;
+    const products = results.filter(Boolean).flat();
+    if (failed) {
+      console.warn(`  ${failed} von ${results.length} Seitenpaketen fehlgeschlagen`);
+      return Object.assign(products, { unvollstaendig: true });
+    }
+    return products;
   });
 }
 

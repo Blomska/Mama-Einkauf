@@ -173,7 +173,9 @@ export default {
         contents,
         schema: ReplySchema,
         maxTokens: 8192,
-        model: env.GEMINI_MODEL || undefined
+        model: env.GEMINI_MODEL || undefined,
+        retryDelayMs: 1500,
+        maxModels: 3
       });
       return json({ antwort: out.antwort, artikel: out.artikel.slice(0, 40) }, 200, cors);
     } catch (err) {
@@ -182,6 +184,9 @@ export default {
       }
       if (err instanceof ApiError) {
         if (err.status === 429) return json({ fehler: 'Gerade ist viel los – bitte in einer Minute nochmal versuchen.' }, 429, cors);
+        if (err.status >= 500) {
+          return json({ fehler: 'Gemini ist gerade überlastet. Bitte in ein, zwei Minuten nochmal fragen. 🙏' }, 503, cors);
+        }
         if (err.status === 400 || err.status === 401 || err.status === 403) {
           return json({ fehler: 'Der Helfer kommt gerade nicht an Gemini heran (Schlüssel oder Einstellung prüfen).' }, 503, cors);
         }
