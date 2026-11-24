@@ -237,6 +237,7 @@ const RecipeSchema = z.object({
     portionen: z.number().int(),
     dauer_minuten: z.number().int(),
     schwierigkeit: z.enum(['einfach', 'mittel']),
+    kategorie: z.enum(['Hauptgerichte', 'Schnelle Gerichte', 'Frühstück', 'Suppen & Eintöpfe', 'Salate & Beilagen', 'Kuchen & Backen']),
     zutaten: z.array(z.object({
       name: z.string(),
       menge: z.string(),
@@ -263,6 +264,8 @@ Zutaten:
 - "im_angebot" und "preis" nur für echte Angebote aus der Liste (Preis wie angegeben), sonst false und "".
 - "vorrat": true für Dinge, die man meist zu Hause hat (Salz, Pfeffer, Öl, Mehl, Zucker, Gewürze, Brühe).
 - "portionen": passend zum Familien-Gedächtnis (Personenzahl dort; sonst 4).
+
+"kategorie": Hauptgerichte, Schnelle Gerichte (bis ca. 30 Min), Frühstück, Suppen & Eintöpfe, Salate & Beilagen oder Kuchen & Backen.
 
 Schritte: kurz, klar, in einfacher Sprache, 4–8 Schritte. "emoji": ein passendes Essens-Emoji.`;
 

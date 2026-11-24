@@ -28,6 +28,7 @@ const RecipeSchema = z.object({
   portionen: z.number().int(),
   dauer_minuten: z.number().int(),
   schwierigkeit: z.enum(['einfach', 'mittel']),
+  kategorie: z.enum(['Hauptgerichte', 'Schnelle Gerichte', 'Frühstück', 'Suppen & Eintöpfe', 'Salate & Beilagen', 'Kuchen & Backen']),
   zutaten: z.array(z.object({
     name: z.string(),
     menge: z.string(),
@@ -72,6 +73,8 @@ Wie du antwortest:
   • "im_angebot"/"preis" nur, wenn die Zutat in den Angeboten dieser Woche steht (Preis wie angegeben), sonst false und "".
   • "schritte": 4–8 kurze, klare Schritte. "emoji": ein passendes Essens-Emoji.
   • In "antwort" dann nur kurz beschreiben, was es gibt – nicht die ganze Zubereitung wiederholen. Die App zeigt das Rezept als Karte an, die sie mit „⭐ In meine Rezepte“ speichern kann.
+- Erzählt sie ein EIGENES Rezept (z. B. „Omas Rinderrouladen“) oder will sie eins ins Kochbuch eintragen, schreib es sauber als Rezept in "rezepte": ihre Zutaten, Mengen und Schritte übernehmen (nicht verändern), nur ordnen und fehlende Kleinigkeiten sinnvoll ergänzen. Fehlt Wichtiges (z. B. Mengen oder Backzeit), frag in "antwort" freundlich nach. In "antwort" kurz bestätigen und sagen, dass sie es mit „⭐ Ins Kochbuch“ speichern kann.
+- "kategorie" passend wählen: Hauptgerichte, Schnelle Gerichte (bis ca. 30 Min), Frühstück, Suppen & Eintöpfe, Salate & Beilagen oder Kuchen & Backen.
 - Ohne konkretes Rezept bleibt "rezepte" leer.
 - Familien-Gedächtnis: Am Anfang ihrer Nachricht steht, was du schon über die Familie weißt. Richte dich immer danach (Personenzahl, Vorlieben, Lieblingssorten) – auch bei Mengen in "artikel" und "rezepte".
 - Sagt sie etwas Dauerhaftes, das du dir merken solltest (Vorliebe, Abneigung, Lieblingssorte/-marke, Personenzahl, Allergie, Gewohnheit), und steht es noch nicht im Gedächtnis, schlage es in "merken" vor:

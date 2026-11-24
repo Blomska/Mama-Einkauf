@@ -129,22 +129,25 @@ function sanitizeItem(raw) {
  *    remove(ids), restore(items)
  * ================================================================ */
 
-/** Familien-Gedächtnis lokal auf dem Gerät (Demo-Modus oder wenn die Firebase-Regel fehlt). */
-class LocalWissenStore {
-  constructor() {
-    this.key = `einkauf:wissen:${LIST_ID}`;
+/**
+ * Gemeinsame Sammlung (z. B. Gedächtnis, Kochbuch) lokal auf dem Gerät –
+ * im Demo-Modus oder solange die passende Firebase-Regel fehlt.
+ */
+class LocalMapStore {
+  constructor(name) {
+    this.key = `einkauf:${name}:${LIST_ID}`;
     this.map = readJSON(this.key, {});
   }
 
-  start(onWissen) {
-    this.onWissen = onWissen;
+  start(onChange) {
+    this.onChange = onChange;
     window.addEventListener('storage', (e) => {
       if (e.key === this.key) {
         this.map = readJSON(this.key, {});
-        onWissen({ ...this.map }, { fromServer: true, local: true });
+        onChange({ ...this.map }, { fromServer: true, local: true });
       }
     });
-    onWissen({ ...this.map }, { fromServer: true, local: true });
+    onChange({ ...this.map }, { fromServer: true, local: true });
   }
 
   set(changes) {
@@ -153,7 +156,7 @@ class LocalWissenStore {
       else delete this.map[id];
     }
     writeJSON(this.key, this.map);
-    this.onWissen?.({ ...this.map }, { fromServer: true, local: true });
+    this.onChange?.({ ...this.map }, { fromServer: true, local: true });
   }
 }
 
@@ -223,14 +226,18 @@ class LocalBackend {
     this.onOffers?.({ ...this.offers });
   }
 
-  startWissen(onWissen) {
-    this.wissen = new LocalWissenStore();
-    this.wissen.start(onWissen);
+  startMap(name, onChange) {
+    this.maps = this.maps || {};
+    this.maps[name] = new LocalMapStore(name);
+    this.maps[name].start(onChange);
   }
 
-  setWissen(changes) {
-    this.wissen.set(changes);
+  setMap(name, changes) {
+    this.maps[name].set(changes);
   }
+
+  startWissen(onWissen) { this.startMap('wissen', onWissen); }
+  setWissen(changes) { this.setMap('wissen', changes); }
 }
 
 /** Firebase Firestore mit Echtzeit-Sync & Offline-Cache. */
@@ -270,7 +277,6 @@ class FirebaseBackend {
     }
     this.col = fs.collection(this.db, 'lists', LIST_ID, 'items');
     this.offersCol = fs.collection(this.db, 'lists', LIST_ID, 'offers');
-    this.wissenCol = fs.collection(this.db, 'lists', LIST_ID, 'wissen');
 
     if (authMod) {
       const auth = authMod.getAuth(app);
@@ -290,7 +296,7 @@ class FirebaseBackend {
       window.addEventListener('online', signIn);
       // Nach (Neu-)Anmeldung Listener neu aufbauen, falls er vorher abgelehnt wurde
       authMod.onAuthStateChanged(auth, (user) => {
-        if (user && (this.listenerFailed || this.offersFailed || this.wissenFailed)) this.subscribe();
+        if (user && (this.listenerFailed || this.offersFailed || Object.values(this.mapFailed || {}).some(Boolean))) this.subscribe();
       });
     }
 
@@ -335,57 +341,73 @@ class FirebaseBackend {
       }
     );
 
-    // Familien-Gedächtnis. Fehlt die Firebase-Regel, wird auf dem Gerät gespeichert.
-    if (this.wissenLocal) return;
-    this.wissenFailed = false;
-    this.unsubscribeWissen?.();
-    this.unsubscribeWissen = fs.onSnapshot(
-      this.wissenCol,
+    // Gemeinsame Sammlungen (Gedächtnis, Kochbuch)
+    Object.keys(this.mapHandlers || {}).forEach((name) => this.subscribeMap(name));
+  }
+
+  /** Echtzeit-Abo einer Sammlung lists/{LIST_ID}/{name}. Fehlt die Regel → Gerät. */
+  subscribeMap(name) {
+    const { fs } = this;
+    this.mapFailed = this.mapFailed || {};
+    this.mapLocal = this.mapLocal || {};
+    this.mapUnsub = this.mapUnsub || {};
+    if (this.mapLocal[name]) return;
+    this.mapFailed[name] = false;
+    this.mapUnsub[name]?.();
+    this.mapUnsub[name] = fs.onSnapshot(
+      fs.collection(this.db, 'lists', LIST_ID, name),
       (snap) => {
         const map = {};
         snap.docs.forEach((d) => { map[d.id] = d.data(); });
-        this.onWissen?.(map, { fromServer: !snap.metadata.fromCache });
+        this.mapHandlers[name]?.(map, { fromServer: !snap.metadata.fromCache });
       },
       (err) => {
-        console.warn('[Firebase] Gedächtnis nicht lesbar:', err.code || err);
-        this.wissenFailed = true;
-        if (err.code === 'permission-denied') this.useLocalWissen();
+        console.warn(`[Firebase] ${name} nicht lesbar:`, err.code || err);
+        this.mapFailed[name] = true;
+        if (err.code === 'permission-denied') this.useLocalMap(name);
       }
     );
   }
 
-  useLocalWissen() {
-    if (this.wissenLocal) return;
-    this.wissenLocal = new LocalWissenStore();
-    this.wissenLocal.start((map, meta) => this.onWissen?.(map, meta));
+  useLocalMap(name) {
+    this.mapLocal = this.mapLocal || {};
+    if (this.mapLocal[name]) return;
+    this.mapUnsub?.[name]?.();
+    this.mapLocal[name] = new LocalMapStore(name);
+    this.mapLocal[name].start((map, meta) => this.mapHandlers[name]?.(map, meta));
   }
 
-  startWissen(onWissen) {
-    this.onWissen = onWissen;
+  startMap(name, onChange) {
+    this.mapHandlers = this.mapHandlers || {};
+    this.mapHandlers[name] = onChange;
   }
 
-  async setWissen(changes) {
-    if (this.wissenLocal) {
-      this.wissenLocal.set(changes);
+  async setMap(name, changes) {
+    if (this.mapLocal?.[name]) {
+      this.mapLocal[name].set(changes);
       return;
     }
     await this.ready;
+    const col = this.fs.collection(this.db, 'lists', LIST_ID, name);
     const batch = this.fs.writeBatch(this.db);
     for (const [id, entry] of Object.entries(changes)) {
-      const ref = this.fs.doc(this.wissenCol, id);
+      const ref = this.fs.doc(col, id);
       if (entry) batch.set(ref, entry);
       else batch.delete(ref);
     }
     batch.commit().catch((err) => {
-      console.error('[Firebase] Gedächtnis speichern fehlgeschlagen:', err);
+      console.error(`[Firebase] ${name} speichern fehlgeschlagen:`, err);
       if (err.code === 'permission-denied') {
-        this.useLocalWissen();
-        this.wissenLocal.set(changes);
+        this.useLocalMap(name);
+        this.mapLocal[name].set(changes);
       } else {
-        showToast('Konnte ich mir gerade nicht merken – bitte nochmal versuchen.');
+        showToast('Konnte ich gerade nicht speichern – bitte nochmal versuchen.');
       }
     });
   }
+
+  startWissen(onWissen) { this.startMap('wissen', onWissen); }
+  setWissen(changes) { return this.setMap('wissen', changes); }
 
   startOffers(onOffers) {
     this.onOffers = onOffers;
@@ -463,6 +485,12 @@ const state = {
   prospekte: null,     // data/prospekte.json (automatisch abgerufen)
   rezepte: null,       // data/rezepte.json (KI-Rezepte der Woche)
   openRecipes: new Set(),
+  kochbuch: [],
+  kochbuchLocal: false,
+  portions: {},
+  rezepteTab: null,
+  kbFilter: 'alle',
+  kbSearch: '',
   view: 'liste',
   wissen: readJSON(`einkauf:wissen-cache:${LIST_ID}`, null) || START_WISSEN,
   wissenLocal: false
@@ -1673,135 +1701,328 @@ function onListNames() {
   return new Set(state.items.filter((i) => !i.done).map((i) => normalize(i.name)));
 }
 
-/* ---------- Meine Rezepte (aus dem Küchenhelfer gespeichert) ---------- */
+/* ---------- Kochbuch (gemeinsam, wächst mit der Zeit) ---------- */
 
-const MY_RECIPES_LS = 'einkauf:meineRezepte';
+const KB_KATEGORIEN = [
+  { id: 'Hauptgerichte', icon: '🍲' },
+  { id: 'Schnelle Gerichte', icon: '⚡' },
+  { id: 'Frühstück', icon: '🥐' },
+  { id: 'Suppen & Eintöpfe', icon: '🥣' },
+  { id: 'Salate & Beilagen', icon: '🥗' },
+  { id: 'Kuchen & Backen', icon: '🍰' }
+];
+const KB_KAT_IDS = KB_KATEGORIEN.map((k) => k.id);
+const OLD_MY_RECIPES_LS = 'einkauf:meineRezepte';
 
-function getMyRecipes() {
-  const list = readJSON(MY_RECIPES_LS, []);
-  return Array.isArray(list) ? list : [];
+/** Kategorie automatisch bestimmen (vom Helfer geliefert oder anhand von Titel/Zeit). */
+function guessKategorie(r) {
+  if (KB_KAT_IDS.includes(r.kategorie)) return r.kategorie;
+  const t = normalize(`${r.titel} ${r.beschreibung || ''}`);
+  if (/kuchen|torte|backen|muffin|plätzchen|plaetzchen|keks|waffel|brownie|stollen|hefezopf|tarte/.test(t)) return 'Kuchen & Backen';
+  if (/suppe|eintopf|chili con|gulaschsuppe|brühe/.test(t)) return 'Suppen & Eintöpfe';
+  if (/salat|beilage|dip\b/.test(t)) return 'Salate & Beilagen';
+  if (/frühstück|fruehstueck|rührei|ruehrei|müsli|muesli|porridge|pancake|pfannkuchen|omelett|overnight|brötchen|bowl|skyr/.test(t)) return 'Frühstück';
+  if (Number(r.dauer_minuten) && Number(r.dauer_minuten) <= 30) return 'Schnelle Gerichte';
+  return 'Hauptgerichte';
 }
 
-function saveMyRecipe(recipe) {
-  const list = getMyRecipes();
-  const key = normalize(recipe.titel);
-  if (list.some((r) => normalize(r.titel) === key)) {
-    showToast(`„${recipe.titel}“ ist schon in deinen Rezepten ⭐`);
+function katIcon(id) {
+  return KB_KATEGORIEN.find((k) => k.id === id)?.icon || '🍽️';
+}
+
+function handleKochbuch(map, meta = {}) {
+  state.kochbuch = Object.entries(map)
+    .map(([id, r]) => ({ id, ...r }))
+    .filter((r) => r.titel && Array.isArray(r.zutaten))
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  state.kochbuchLocal = Boolean(meta.local) && isFirebaseConfigured();
+
+  // Bisherige „Meine Rezepte" (nur auf dem Gerät) einmalig ins Kochbuch übernehmen
+  const old = readJSON(OLD_MY_RECIPES_LS, []);
+  if (meta.fromServer && Array.isArray(old) && old.length) {
+    const known = new Set(state.kochbuch.map((r) => normalize(r.titel)));
+    const changes = {};
+    old.filter((r) => r && r.titel && !known.has(normalize(r.titel))).forEach((r) => {
+      changes[makeId()] = kochbuchEntry(r, 'helfer');
+    });
+    try { localStorage.removeItem(OLD_MY_RECIPES_LS); } catch { /* egal */ }
+    if (Object.keys(changes).length) {
+      backend.setMap('kochbuch', changes);
+      return;
+    }
+  }
+  if (state.view === 'rezepte') renderRecipes();
+  if (state.view === 'helfer') renderChat();
+}
+
+function kochbuchEntry(r, herkunft) {
+  return {
+    titel: String(r.titel).slice(0, 120),
+    emoji: r.emoji || '🍽️',
+    beschreibung: r.beschreibung || '',
+    portionen: Number(r.portionen) || 4,
+    dauer_minuten: Number(r.dauer_minuten) || 0,
+    schwierigkeit: r.schwierigkeit || 'einfach',
+    zutaten: (r.zutaten || []).map((z) => ({
+      name: z.name, menge: z.menge || '', laden: z.laden || 'egal',
+      im_angebot: false, preis: '', vorrat: Boolean(z.vorrat)
+    })),
+    schritte: r.schritte || [],
+    kategorie: guessKategorie(r),
+    herkunft,
+    favorit: false,
+    notiz: '',
+    createdAt: Date.now()
+  };
+}
+
+function inKochbuch(titel) {
+  return (state.kochbuch || []).some((r) => normalize(r.titel) === normalize(titel));
+}
+
+function addToKochbuch(recipe, herkunft) {
+  if (inKochbuch(recipe.titel)) {
+    showToast(`„${recipe.titel}“ ist schon im Kochbuch 📖`);
     return false;
   }
-  list.unshift({ ...recipe, id: makeId(), gespeichert: Date.now() });
-  writeJSON(MY_RECIPES_LS, list.slice(0, 60));
-  showToast(`⭐ „${recipe.titel}“ ist jetzt in deinen Rezepten`, { label: 'Ansehen', onClick: () => showView('rezepte') });
+  backend.setMap('kochbuch', { [makeId()]: kochbuchEntry(recipe, herkunft) });
+  showToast(`📖 „${recipe.titel}“ steht jetzt im Kochbuch`, {
+    label: 'Ansehen',
+    onClick: () => { state.rezepteTab = 'kochbuch'; showView('rezepte'); }
+  });
   vibrate(15);
   return true;
 }
 
-function deleteMyRecipe(id) {
-  const list = getMyRecipes();
-  const recipe = list.find((r) => r.id === id);
-  writeJSON(MY_RECIPES_LS, list.filter((r) => r.id !== id));
-  renderRecipes();
-  if (recipe) {
-    showToast(`„${recipe.titel}“ entfernt`, {
-      label: 'Rückgängig',
-      onClick: () => {
-        writeJSON(MY_RECIPES_LS, [recipe, ...getMyRecipes()]);
-        renderRecipes();
-      }
-    });
-  }
+function updateKochbuch(id, patch) {
+  const entry = (state.kochbuch || []).find((r) => r.id === id);
+  if (!entry) return;
+  const { id: _, ...data } = entry;
+  backend.setMap('kochbuch', { [id]: { ...data, ...patch } });
 }
 
-/** Rezept anhand seines Schlüssels finden: "w-<index>" (Woche), "m-<id>" (meine), "c-<msg>-<i>" (Chat). */
+function removeFromKochbuch(id) {
+  const entry = (state.kochbuch || []).find((r) => r.id === id);
+  if (!entry) return;
+  const { id: _, ...data } = entry;
+  backend.setMap('kochbuch', { [id]: null });
+  showToast(`„${entry.titel}“ aus dem Kochbuch entfernt`, {
+    label: 'Rückgängig',
+    onClick: () => backend.setMap('kochbuch', { [id]: data })
+  });
+}
+
+/* ---------- Portionen umrechnen ---------- */
+
+const FRACTIONS = { '½': 0.5, '¼': 0.25, '¾': 0.75, '⅓': 1 / 3, '⅔': 2 / 3 };
+
+function formatAmount(n, unit = '') {
+  const u = unit.toLowerCase();
+  let v;
+  if (u === 'g' || u === 'ml') v = n >= 100 ? Math.round(n / 10) * 10 : Math.max(5, Math.round(n / 5) * 5);
+  else if (u === 'kg' || u === 'l') v = Math.round(n * 10) / 10;
+  else v = Math.max(0.5, Math.round(n * 2) / 2); // EL, TL, Tassen …: auf ½ runden
+  return String(v).replace('.', ',');
+}
+
+// Mengen, die man nur ganz kaufen kann → auf ganze Stücke runden
+const WHOLE_UNITS = /(stück|stk|st\.|\beier?\b|dosen?|gläser|glas|becher|packung|pck|päckchen|bund|zehen?|scheiben?|beutel|knollen?|köpfe?|kopf|stangen?|flaschen?|tafeln?|rollen?)/i;
+
+/** "500 g" ×1,5 → "750 g", "2–3 Zehen" ×2 → "4–6 Zehen", "1 Prise" bleibt. */
+function scaleMenge(menge, factor) {
+  if (!menge || factor === 1 || /prise|etwas|nach geschmack|n\. b\./i.test(menge)) return menge;
+  const whole = WHOLE_UNITS.test(menge);
+  return String(menge).replace(/(\d+(?:[.,]\d+)?|[½¼¾⅓⅔])(\s*)([a-zäöüß.]*)/gi, (all, num, space, unit) => {
+    let n = FRACTIONS[num] ?? parseFloat(num.replace(',', '.'));
+    if (!Number.isFinite(n)) return all;
+    n *= factor;
+    const u = unit.toLowerCase();
+    if (u === 'g' && n >= 1000) return `${formatAmount(n / 1000, 'kg')}${space}kg`;
+    if (u === 'ml' && n >= 1000) return `${formatAmount(n / 1000, 'l')}${space}l`;
+    if (whole) return `${Math.max(1, Math.round(n + 0.24))}${space}${unit}`;
+    return `${formatAmount(n, u)}${space}${unit}`;
+  });
+}
+
+function portionsFor(key, r) {
+  return state.portions[key] || Number(r.portionen) || 4;
+}
+
+/** Rezept anhand seines Schlüssels: "w-<i>" (Woche), "k-<id>" (Kochbuch), "c-<msg>-<i>" (Chat). */
 function recipeByKey(key) {
   const [type, a, b] = String(key).split('-');
   if (type === 'w') return state.rezepte?.rezepte?.[Number(a)] || null;
-  if (type === 'm') return getMyRecipes().find((r) => r.id === key.slice(2)) || null;
+  if (type === 'k') return (state.kochbuch || []).find((r) => r.id === key.slice(2)) || null;
   if (type === 'c') return chat.messages[Number(a)]?.rezepte?.[Number(b)] || null;
   return null;
 }
 
-/** Eine Rezeptkarte (für Woche, meine Rezepte und Chat). */
-function recipeCardHtml(r, key, { saved = false, inChat = false } = {}) {
+/** Rezeptkarte. mode: "kochbuch" | "woche" | "chat" */
+function recipeCardHtml(r, key, { mode = 'woche' } = {}) {
   const open = state.openRecipes.has(key);
   const onList = onListNames();
   const zutaten = Array.isArray(r.zutaten) ? r.zutaten : [];
   const deals = zutaten.filter((z) => z.im_angebot);
+  const base = Number(r.portionen) || 4;
+  const persons = portionsFor(key, r);
+  const factor = persons / base;
+  const k = escapeHtml(key);
+
   const ingredients = zutaten.map((z, zi) => {
-    const already = onList.has(normalize(z.name));
+    const already = onList.has(normalize(applyWissen(z.name)));
     const checked = !z.vorrat && !already;
     return `
         <label class="ingr">
-          <input type="checkbox" data-recipe="${escapeHtml(key)}" data-ingr="${zi}" ${checked ? 'checked' : ''}>
+          <input type="checkbox" data-recipe="${k}" data-ingr="${zi}" ${checked ? 'checked' : ''}>
           <span>${escapeHtml(z.name)}
             ${z.im_angebot ? `<br><span class="ingr__deal">🏷️ ${escapeHtml(STORE_LABELS[z.laden] || '')} ${escapeHtml(z.preis)}</span>` : ''}
             ${already ? '<br><span class="ingr__deal" style="color:var(--primary-dark)">✓ steht schon drauf</span>' : ''}
           </span>
-          <span class="ingr__menge">${escapeHtml(z.menge)}${z.vorrat ? '<br><small>(Vorrat)</small>' : ''}</span>
+          <span class="ingr__menge">${escapeHtml(scaleMenge(z.menge, factor))}${z.vorrat ? '<br><small>(Vorrat)</small>' : ''}</span>
         </label>`;
   }).join('');
-  const isSaved = saved || getMyRecipes().some((m) => normalize(m.titel) === normalize(r.titel));
+
+  const saved = mode === 'kochbuch' || inKochbuch(r.titel);
   return `
-      <article class="recipe${inChat ? ' recipe--chat' : ''}">
+      <article class="recipe${mode === 'chat' ? ' recipe--chat' : ''}${r.favorit ? ' is-fav' : ''}">
         <div class="recipe__top">
           <span class="recipe__emoji" aria-hidden="true">${escapeHtml(r.emoji || '🍽️')}</span>
-          <div>
+          <div class="recipe__head">
             <h3 class="recipe__title">${escapeHtml(r.titel)}</h3>
-            <p class="recipe__meta">⏱ ${Number(r.dauer_minuten) || '?'} Min · 👥 ${Number(r.portionen) || 4} Portionen · ${escapeHtml(r.schwierigkeit || 'einfach')}</p>
+            <p class="recipe__meta">⏱ ${Number(r.dauer_minuten) || '?'} Min · 👥 ${base} Portionen · ${escapeHtml(r.schwierigkeit || 'einfach')}</p>
           </div>
+          ${mode === 'kochbuch' ? `
+          <button type="button" class="recipe__fav" data-kb-fav="${escapeHtml(r.id)}" aria-pressed="${Boolean(r.favorit)}"
+                  aria-label="${r.favorit ? 'Nicht mehr Lieblingsrezept' : 'Als Lieblingsrezept markieren'}">${r.favorit ? '❤️' : '🤍'}</button>` : ''}
         </div>
         <p class="recipe__desc">${escapeHtml(r.beschreibung || '')}</p>
+        ${mode === 'kochbuch' && r.notiz ? `<p class="recipe__note">📝 ${escapeHtml(r.notiz)}</p>` : ''}
         ${deals.length ? `<div class="recipe__deals">${deals.slice(0, 4).map((z) => `<span class="recipe__deal">🏷️ ${escapeHtml(z.name)} ${escapeHtml(z.preis)}</span>`).join('')}</div>` : ''}
-        ${inChat ? `
+        ${mode !== 'kochbuch' ? `
         <div class="recipe__save">
-          ${isSaved
-            ? '<span class="recipe__saved">⭐ In deinen Rezepten</span>'
-            : `<button type="button" class="btn btn--primary btn--block" data-recipe-save="${escapeHtml(key)}">⭐ In meine Rezepte</button>`}
+          ${saved
+            ? '<span class="recipe__saved">📖 Steht im Kochbuch</span>'
+            : `<button type="button" class="btn btn--primary btn--block" data-recipe-save="${k}">⭐ Ins Kochbuch</button>`}
         </div>` : ''}
-        <button type="button" class="recipe__toggle" data-recipe-toggle="${escapeHtml(key)}" aria-expanded="${open}">
+        <button type="button" class="recipe__toggle" data-recipe-toggle="${k}" aria-expanded="${open}">
           ${open ? 'Rezept zuklappen' : '📖 Zutaten & Zubereitung'} <span aria-hidden="true">${open ? '▴' : '▾'}</span>
         </button>
         ${open ? `
         <div class="recipe__body">
+          <div class="portions">
+            <span>Für</span>
+            <button type="button" class="portions__btn" data-portion="${k}" data-step="-1" aria-label="Weniger Portionen" ${persons <= 1 ? 'disabled' : ''}>−</button>
+            <strong>${persons}</strong>
+            <button type="button" class="portions__btn" data-portion="${k}" data-step="1" aria-label="Mehr Portionen">＋</button>
+            <span>Personen</span>
+          </div>
           <h4>Zutaten</h4>
           ${ingredients}
-          <button type="button" class="btn btn--primary btn--block recipe__add" data-recipe-add="${escapeHtml(key)}">🛒 Ausgewählte auf die Liste</button>
+          <button type="button" class="btn btn--primary btn--block recipe__add" data-recipe-add="${k}">🛒 Ausgewählte auf die Liste</button>
           <h4>Zubereitung</h4>
           <ol class="steps">${(r.schritte || []).map((st) => `<li>${escapeHtml(st)}</li>`).join('')}</ol>
-          ${saved ? `<button type="button" class="btn btn--ghost-danger recipe__delete" data-recipe-delete="${escapeHtml(r.id)}">🗑️ Aus meinen Rezepten entfernen</button>` : ''}
+          ${mode === 'kochbuch' ? `
+          <h4>📝 Meine Notiz</h4>
+          <textarea class="recipe__notefield" data-kb-note="${escapeHtml(r.id)}" rows="2" maxlength="500"
+                    placeholder="z. B. weniger Salz, Papa mag mehr Knoblauch">${escapeHtml(r.notiz || '')}</textarea>
+          <h4>Kategorie</h4>
+          <select class="recipe__cat" data-kb-cat="${escapeHtml(r.id)}" aria-label="Kategorie">
+            ${KB_KATEGORIEN.map((c) => `<option value="${escapeHtml(c.id)}" ${c.id === r.kategorie ? 'selected' : ''}>${c.icon} ${escapeHtml(c.id)}</option>`).join('')}
+          </select>
+          <button type="button" class="btn btn--ghost-danger recipe__delete" data-kb-delete="${escapeHtml(r.id)}">🗑️ Aus dem Kochbuch entfernen</button>` : ''}
         </div>` : ''}
       </article>`;
 }
 
 function renderRecipes() {
   const week = state.rezepte?.rezepte || [];
-  const mine = getMyRecipes();
-  const parts = [];
+  const book = state.kochbuch || [];
+  if (!state.rezepteTab) state.rezepteTab = book.length ? 'kochbuch' : 'woche';
+  const tab = state.rezepteTab;
 
-  if (mine.length) {
-    parts.push(`<h3 class="recipes__heading">⭐ Meine Rezepte <span>${mine.length}</span></h3>`);
-    parts.push(...mine.map((r) => recipeCardHtml(r, `m-${r.id}`, { saved: true })));
+  els.recipesSub.textContent = tab === 'kochbuch'
+    ? 'Eure gesammelten Lieblingsrezepte – für die ganze Familie.'
+    : 'Ideen aus den aktuellen Angeboten. Gefällt dir eins? Mit ⭐ ins Kochbuch.';
+
+  const tabs = `
+    <div class="seg seg--recipes" role="tablist" aria-label="Rezepte">
+      <button type="button" role="tab" data-rtab="kochbuch" class="${tab === 'kochbuch' ? 'is-active' : ''}" aria-selected="${tab === 'kochbuch'}">📖 Mein Kochbuch <small>${book.length}</small></button>
+      <button type="button" role="tab" data-rtab="woche" class="${tab === 'woche' ? 'is-active' : ''}" aria-selected="${tab === 'woche'}">🗓️ Ideen der Woche <small>${week.length}</small></button>
+    </div>`;
+
+  if (tab === 'woche') {
+    const until = state.rezepte?.gueltigBis;
+    const untilText = until && until >= todayIso()
+      ? `<p class="recipes__info">Aus den Angeboten bis ${parseIso(until).toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' })}.</p>` : '';
+    els.recipes.innerHTML = tabs + (week.length
+      ? untilText + week.map((r, ri) => recipeCardHtml(r, `w-${ri}`, { mode: 'woche' })).join('')
+      : `<div class="empty-card"><div class="big" aria-hidden="true">🍲</div>
+          <p><strong>Die Ideen der Woche kommen bald.</strong></p>
+          <p>Sie werden automatisch aus den aktuellen Angeboten erstellt.</p></div>`);
+    return;
   }
 
-  if (week.length) {
-    if (mine.length) parts.push('<h3 class="recipes__heading">🗓️ Ideen der Woche</h3>');
-    parts.push(...week.map((r, ri) => recipeCardHtml(r, `w-${ri}`)));
-  } else {
-    parts.push(`
+  if (!book.length) {
+    els.recipes.innerHTML = tabs + `
       <div class="empty-card">
-        <div class="big" aria-hidden="true">🍲</div>
-        <p><strong>Die Rezeptideen der Woche kommen bald.</strong></p>
-        <p>Sie werden automatisch aus den aktuellen Angeboten erstellt.
-        Frag gern den Küchenhelfer nach einem Rezept – mit „⭐ In meine Rezepte“ landet es hier.</p>
-        <button type="button" class="btn btn--primary" data-nav="helfer">💬 Küchenhelfer fragen</button>
-      </div>`);
+        <div class="big" aria-hidden="true">📖</div>
+        <p><strong>Dein Kochbuch ist noch leer.</strong></p>
+        <p>Tippe bei einem Rezept auf „⭐ Ins Kochbuch“ – in den Ideen der Woche oder beim Küchenhelfer.
+        Eigene Rezepte (z. B. von Oma) erzählst du einfach dem Helfer.</p>
+        <button type="button" class="btn btn--primary" data-rtab="woche">🗓️ Ideen der Woche ansehen</button>
+        <button type="button" class="btn btn--ghost" data-nav="helfer" style="margin-top:8px">💬 Eigenes Rezept eintragen</button>
+      </div>`;
+    return;
   }
 
-  const until = state.rezepte?.gueltigBis;
-  els.recipesSub.textContent = week.length && until && until >= todayIso()
-    ? `Ideen aus den Angeboten bis ${parseIso(until).toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' })} – mit einem Tipp sind die Zutaten auf der Liste.`
-    : 'Leckere Ideen – mit einem Tipp sind die Zutaten auf der Liste.';
-  els.recipes.innerHTML = parts.join('');
+  const filter = state.kbFilter || 'alle';
+  const cats = KB_KATEGORIEN.filter((c) => book.some((r) => r.kategorie === c.id));
+  const hasFav = book.some((r) => r.favorit);
+  if (!['alle', 'lieblinge', ...cats.map((c) => c.id)].includes(filter)) state.kbFilter = 'alle';
+  const chip = (id, label) => `<button type="button" class="kbchip${(state.kbFilter || 'alle') === id ? ' is-active' : ''}" data-kb-filter="${escapeHtml(id)}">${label}</button>`;
+
+  els.recipes.innerHTML = tabs + `
+    <div class="kb__tools">
+      <input type="search" id="kbSearch" placeholder="🔍 Im Kochbuch suchen …" value="${escapeHtml(state.kbSearch || '')}" aria-label="Im Kochbuch suchen" autocomplete="off">
+      <div class="kb__filters">
+        ${chip('alle', 'Alle')}
+        ${hasFav ? chip('lieblinge', '❤️ Lieblinge') : ''}
+        ${cats.map((c) => chip(c.id, `${c.icon} ${escapeHtml(c.id)}`)).join('')}
+      </div>
+    </div>
+    ${state.kochbuchLocal ? '<p class="memory__note">Gerade nur auf diesem Handy gespeichert – für die ganze Familie fehlt noch eine Firebase-Regel (siehe README).</p>' : ''}
+    <div id="kbList"></div>`;
+  renderKochbuchList();
+}
+
+function renderKochbuchList() {
+  const list = $('#kbList', els.recipes);
+  if (!list) return;
+  const q = normalize(state.kbSearch || '');
+  const filter = state.kbFilter || 'alle';
+  const book = (state.kochbuch || []).filter((r) => {
+    if (filter === 'lieblinge' && !r.favorit) return false;
+    if (filter !== 'alle' && filter !== 'lieblinge' && r.kategorie !== filter) return false;
+    if (!q) return true;
+    return normalize(`${r.titel} ${r.beschreibung} ${r.notiz || ''} ${(r.zutaten || []).map((z) => z.name).join(' ')}`).includes(q);
+  });
+  if (!book.length) {
+    list.innerHTML = `<p class="viewer__empty">Nichts gefunden${q ? ` für „${escapeHtml(state.kbSearch)}“` : ''}.</p>`;
+    return;
+  }
+  const sections = [];
+  const favs = book.filter((r) => r.favorit);
+  if (favs.length && filter !== 'lieblinge') sections.push(['❤️ Lieblingsrezepte', favs]);
+  if (filter === 'lieblinge') sections.push(['❤️ Lieblingsrezepte', favs]);
+  else {
+    KB_KATEGORIEN.forEach((c) => {
+      const items = book.filter((r) => r.kategorie === c.id && !r.favorit);
+      if (items.length) sections.push([`${c.icon} ${c.id}`, items]);
+    });
+  }
+  list.innerHTML = sections.map(([title, items]) => `
+    <h3 class="recipes__heading">${escapeHtml(title)} <span>${items.length}</span></h3>
+    ${items.map((r) => recipeCardHtml(r, `k-${r.id}`, { mode: 'kochbuch' })).join('')}`).join('');
 }
 
 /** Fügt Artikel [{ name, menge, laden }] hinzu – gruppiert nach Laden. */
@@ -1818,48 +2039,89 @@ function addSuggested(items) {
   return added;
 }
 
+function rerenderRecipesOrChat(container) {
+  if (container === els.chatLog) renderChat();
+  else if ($('#kbList', els.recipes) && state.rezepteTab === 'kochbuch') renderKochbuchList();
+  else renderRecipes();
+}
+
 function addRecipeIngredients(key, container) {
   const recipe = recipeByKey(key);
   if (!recipe) return;
+  const factor = portionsFor(key, recipe) / (Number(recipe.portionen) || 4);
   const chosen = $$('input[data-recipe]', container)
     .filter((cb) => cb.dataset.recipe === key && cb.checked)
-    .map((cb) => recipe.zutaten[Number(cb.dataset.ingr)]);
+    .map((cb) => {
+      const z = recipe.zutaten[Number(cb.dataset.ingr)];
+      return { ...z, menge: scaleMenge(z.menge, factor) };
+    });
   if (!chosen.length) {
     showToast('Bitte mindestens eine Zutat anhaken.');
     return;
   }
   addSuggested(chosen);
-  setTimeout(() => {
-    if (state.view === 'helfer') renderChat();
-    else renderRecipes();
-  }, 100);
+  setTimeout(() => rerenderRecipesOrChat(container), 100);
 }
 
 /** Gemeinsame Klicks auf Rezeptkarten (Rezepte-Reiter und Chat). */
 function handleRecipeClick(e, container) {
-  const toggle = e.target.closest('[data-recipe-toggle]');
+  const t = e.target;
+  const tab = t.closest('[data-rtab]');
+  if (tab) {
+    state.rezepteTab = tab.dataset.rtab;
+    renderRecipes();
+    return true;
+  }
+  const filter = t.closest('[data-kb-filter]');
+  if (filter) {
+    state.kbFilter = filter.dataset.kbFilter;
+    renderRecipes();
+    return true;
+  }
+  const toggle = t.closest('[data-recipe-toggle]');
   if (toggle) {
     const key = toggle.dataset.recipeToggle;
     if (state.openRecipes.has(key)) state.openRecipes.delete(key);
     else state.openRecipes.add(key);
-    if (container === els.chatLog) renderChat();
-    else renderRecipes();
+    rerenderRecipesOrChat(container);
     return true;
   }
-  const add = e.target.closest('[data-recipe-add]');
+  const portion = t.closest('[data-portion]');
+  if (portion) {
+    const key = portion.dataset.portion;
+    const recipe = recipeByKey(key);
+    if (recipe) {
+      state.portions[key] = Math.max(1, Math.min(20, portionsFor(key, recipe) + Number(portion.dataset.step)));
+      rerenderRecipesOrChat(container);
+    }
+    return true;
+  }
+  const add = t.closest('[data-recipe-add]');
   if (add) {
     addRecipeIngredients(add.dataset.recipeAdd, container);
     return true;
   }
-  const save = e.target.closest('[data-recipe-save]');
+  const save = t.closest('[data-recipe-save]');
   if (save) {
-    const recipe = recipeByKey(save.dataset.recipeSave);
-    if (recipe && saveMyRecipe(recipe)) renderChat();
+    const key = save.dataset.recipeSave;
+    const recipe = recipeByKey(key);
+    if (recipe && addToKochbuch(recipe, key.startsWith('w-') ? 'woche' : 'helfer')) {
+      setTimeout(() => rerenderRecipesOrChat(container), 50);
+    }
     return true;
   }
-  const del = e.target.closest('[data-recipe-delete]');
+  const fav = t.closest('[data-kb-fav]');
+  if (fav) {
+    const entry = (state.kochbuch || []).find((r) => r.id === fav.dataset.kbFav);
+    if (entry) {
+      updateKochbuch(entry.id, { favorit: !entry.favorit });
+      vibrate(10);
+    }
+    return true;
+  }
+  const del = t.closest('[data-kb-delete]');
   if (del) {
-    deleteMyRecipe(del.dataset.recipeDelete);
+    removeFromKochbuch(del.dataset.kbDelete);
     return true;
   }
   return false;
@@ -2022,7 +2284,7 @@ function renderChat() {
   const parts = chat.messages.map((m, mi) => {
     if (m.role === 'user') return `<div class="bubble bubble--me">${escapeHtml(m.content)}</div>`;
     let html = `<div class="bubble bubble--bot${m.error ? ' bubble--error' : ''}">${formatBotText(m.content)}</div>`;
-    (m.rezepte || []).forEach((r, ri) => { html += recipeCardHtml(r, `c-${mi}-${ri}`, { inChat: true }); });
+    (m.rezepte || []).forEach((r, ri) => { html += recipeCardHtml(r, `c-${mi}-${ri}`, { mode: 'chat' }); });
     if (m.merken?.length) {
       const known = new Set((state.wissen || []).map((w) => normalize(w.text)));
       html += `
@@ -2336,6 +2598,23 @@ function bindEvents() {
 
   // Rezepte
   els.recipes.addEventListener('click', (e) => handleRecipeClick(e, els.recipes));
+  els.recipes.addEventListener('input', (e) => {
+    if (e.target.id !== 'kbSearch') return;
+    state.kbSearch = e.target.value;
+    renderKochbuchList();
+  });
+  els.recipes.addEventListener('change', (e) => {
+    const note = e.target.closest('[data-kb-note]');
+    if (note) {
+      updateKochbuch(note.dataset.kbNote, { notiz: note.value.trim().slice(0, 500) });
+      showToast('📝 Notiz gespeichert');
+    }
+    const cat = e.target.closest('[data-kb-cat]');
+    if (cat && KB_KAT_IDS.includes(cat.value)) {
+      updateKochbuch(cat.dataset.kbCat, { kategorie: cat.value });
+      showToast(`Jetzt unter „${cat.value}“`);
+    }
+  });
 
   // Küchenhelfer
   els.chatForm.addEventListener('submit', (e) => {
@@ -2356,6 +2635,12 @@ function bindEvents() {
     els.chatInput.style.height = `${Math.min(els.chatInput.scrollHeight, 140)}px`;
   });
   els.chatIdeas.addEventListener('click', (e) => {
+    const fill = e.target.closest('[data-idea-fill]');
+    if (fill) {
+      els.chatInput.value = fill.dataset.ideaFill;
+      els.chatInput.focus();
+      return;
+    }
     const idea = e.target.closest('[data-idea]');
     if (idea) sendChat(idea.dataset.idea);
   });
@@ -2552,6 +2837,7 @@ function init() {
   backend.startOffers(handleOffers);
   renderWissen();
   backend.startWissen(handleWissen);
+  backend.startMap('kochbuch', handleKochbuch);
   backend.start(handleItems, setStatus);
 }
 

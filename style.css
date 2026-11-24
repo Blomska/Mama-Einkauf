@@ -1236,3 +1236,34 @@ h1, h2, h3, .btn, .chip, .tab { font-family: var(--font); }
 .weekly .chip small { color: var(--text-faint); font-weight: 600; }
 .weekly__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .weekly__actions .btn { flex: 1; min-height: 48px; font-size: 16px; padding: 0 12px; }
+
+/* Kochbuch */
+.seg--recipes { margin: 0 0 14px; }
+.recipes__info { margin: 0 4px 4px; font-size: 15px; color: var(--text-faint); }
+.recipe__head { flex: 1; min-width: 0; }
+.recipe__fav { flex-shrink: 0; width: 52px; height: 52px; border: 0; border-radius: 50%; background: #FFF1F1; font-size: 26px; }
+.recipe.is-fav { border: 2px solid #FFD0D0; }
+.recipe__note { margin: 0 16px 10px; padding: 8px 12px; border-radius: 12px; background: #FFF9E6; color: #7A5B00; font-size: 15px; }
+.recipe__notefield, .recipe__cat {
+  width: 100%; min-height: 48px; padding: 10px 12px;
+  border: 2px solid var(--line-strong); border-radius: 12px;
+  background: #FFFDFB; font-size: 16px; font-family: inherit;
+}
+.recipe__notefield { resize: vertical; }
+.portions { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 8px 0 4px; padding: 8px; border-radius: 14px; background: #FFF8F1; font-size: 17px; font-weight: 700; }
+.portions strong { min-width: 28px; text-align: center; font-size: 22px; }
+.portions__btn { width: 48px; height: 48px; border: 2px solid var(--primary); border-radius: 50%; background: #fff; color: var(--primary-dark); font-size: 24px; font-weight: 900; }
+.portions__btn:disabled { opacity: .35; }
+.kb__tools { margin-bottom: 8px; }
+.kb__tools input {
+  width: 100%; min-height: 52px; padding: 0 16px;
+  border: 2px solid var(--line-strong); border-radius: 14px; background: #fff; font-size: 17px;
+}
+.kb__filters { display: flex; gap: 6px; margin: 10px -16px 0; padding: 0 16px 4px; overflow-x: auto; scrollbar-width: none; }
+.kb__filters::-webkit-scrollbar { display: none; }
+.kbchip {
+  flex: 0 0 auto; min-height: 44px; padding: 0 14px;
+  border: 2px solid var(--line); border-radius: 999px; background: #fff;
+  font-size: 15px; font-weight: 800; color: var(--text-soft); white-space: nowrap;
+}
+.kbchip.is-active { background: var(--primary); border-color: var(--primary); color: #fff; }
