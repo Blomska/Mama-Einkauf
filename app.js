@@ -39,6 +39,7 @@ import {
   isFirebaseConfigured
 } from './config.js';
 import { START_WISSEN, WISSEN_VERSION, WOCHENEINKAUF } from './wissen.js';
+import { parseRezeptText } from './rezeptformat.js';
 
 /* ================================================================
  * 1. Konstanten & Hilfsfunktionen
@@ -1999,9 +2000,8 @@ function renderRecipes() {
       <button type="button" role="tab" data-rtab="passt" class="${tab === 'passt' ? 'is-active' : ''}" aria-selected="${tab === 'passt'}">🏷️ Im Angebot <small>${matches.length}</small></button>
       <button type="button" role="tab" data-rtab="woche" class="${tab === 'woche' ? 'is-active' : ''}" aria-selected="${tab === 'woche'}">🗓️ Ideen <small>${week.length}</small></button>
     </div>`;
-  const importBtn = CHAT_URL
-    ? '<button type="button" class="btn btn--ghost btn--block kb__import" data-import-open>📷 Rezept aus Foto oder Link holen</button>'
-    : '';
+  const importBtn = '<button type="button" class="btn btn--primary btn--block kb__import" data-paste-recipe>📋 Rezept einfügen</button>'
+    + (CHAT_URL ? '<button type="button" class="btn btn--ghost btn--block kb__import" data-import-open>📷 Rezept aus Foto oder Link holen</button>' : '');
 
   if (tab === 'passt') {
     els.recipes.innerHTML = tabs + (matches.length
@@ -2032,7 +2032,7 @@ function renderRecipes() {
         <div class="big" aria-hidden="true">📖</div>
         <p><strong>Dein Kochbuch ist noch leer.</strong></p>
         <p>Tippe bei einem Rezept auf „⭐ Ins Kochbuch“ – in den Ideen der Woche oder beim Küchenhelfer.
-        Ein Rezept aus einem Kochbuch oder einer Zeitschrift kannst du auch einfach abfotografieren.</p>
+        Ein fertiges Rezept aus „Rezept für Mama“ (ChatGPT oder Claude) kopierst du und tippst hier auf „📋 Rezept einfügen“.</p>
         ${importBtn}
         <button type="button" class="btn btn--primary" data-rtab="woche" style="margin-top:8px">🗓️ Ideen der Woche ansehen</button>
         <button type="button" class="btn btn--ghost" data-nav="helfer" style="margin-top:8px">💬 Eigenes Rezept eintragen</button>
@@ -2144,6 +2144,7 @@ function handleRecipeClick(e, container) {
     return true;
   }
   if (t.closest('[data-import-open]')) { openImportDialog(); return true; }
+  if (t.closest('[data-paste-recipe]')) { pasteRecipe(); return true; }
   const cookBtn = t.closest('[data-cook]');
   if (cookBtn) { openCook(cookBtn.dataset.cook); return true; }
   const toggle = t.closest('[data-recipe-toggle]');
@@ -2283,12 +2284,71 @@ async function runImport(payload, herkunft) {
   importBusy = false;
 }
 
+/* ---------- Rezept einfügen (fertig aufbereitet von ChatGPT/Claude, ohne eigene KI) ---------- */
+
+/**
+ * Text im „Rezept für Mama“-Format ins Kochbuch übernehmen.
+ * Gibt die Zahl der erkannten Rezepte zurück (0 = kein Rezept im Format).
+ */
+function saveFormattedRecipes(text) {
+  const found = parseRezeptText(text);
+  if (!found.length) return 0;
+  let firstId = null;
+  found.forEach(({ rezept, hinweis }) => {
+    const id = addToKochbuch(rezept, 'ki-text');
+    if (id && hinweis) updateKochbuch(id, { notiz: hinweis });
+    if (id && !firstId) firstId = id;
+  });
+  if (found.length > 1 && firstId) showToast(`📖 ${found.length} Rezepte stehen jetzt im Kochbuch`);
+  if (firstId) {
+    state.rezepteTab = 'kochbuch';
+    state.kbFilter = 'alle';
+    state.kbSearch = '';
+    state.openRecipes.add(`k-${firstId}`);
+    showView('rezepte');
+    vibrate(20);
+  }
+  return found.length;
+}
+
+function pasteStatus(text, error = false) {
+  const el = $('#pasteStatus');
+  el.hidden = !text;
+  el.textContent = text || '';
+  el.classList.toggle('is-error', error);
+}
+
+function openPasteDialog(prefill = '', message = '') {
+  $('#pasteText').value = prefill;
+  pasteStatus(message, Boolean(message));
+  const dlg = $('#pasteDialog');
+  if (!dlg.open) dlg.showModal();
+}
+
+/** Knopf „Rezept einfügen“: erst direkt aus der Zwischenablage, sonst Feld zum Einfügen. */
+async function pasteRecipe() {
+  let clip = '';
+  try {
+    if (navigator.clipboard?.readText) clip = await navigator.clipboard.readText();
+  } catch { /* nicht erlaubt – dann eben per Hand einfügen */ }
+  if (clip && saveFormattedRecipes(clip)) return;
+  openPasteDialog('', clip.trim()
+    ? 'In der Zwischenablage ist kein fertiges Rezept. Kopiere zuerst die ganze Antwort von „Rezept für Mama“.'
+    : '');
+}
+
 /** Über „Teilen“ aus einer anderen App (z. B. Chefkoch) geöffnet → Rezept holen. */
 function handleSharedRecipe() {
   const params = new URLSearchParams(location.search);
   if (!params.has('url') && !params.has('text') && !params.has('title')) return;
   const all = [params.get('url'), params.get('text'), params.get('title')].filter(Boolean).join(' ');
   history.replaceState(null, '', location.pathname);
+  // Fertiges Rezept aus ChatGPT/Claude („Rezept für Mama“) → direkt ins Kochbuch, ohne Helfer
+  const shared = [params.get('title'), params.get('text')].filter(Boolean).join('\n');
+  if (parseRezeptText(shared).length) {
+    setTimeout(() => saveFormattedRecipes(shared), 300);
+    return;
+  }
   const link = all.match(/https?:\/\/\S+/)?.[0] || '';
   state.rezepteTab = 'kochbuch';
   showView('rezepte');
@@ -2854,6 +2914,7 @@ function bindEvents() {
     e.preventDefault();
     const text = $('#importText').value.trim();
     if (text.length < 30) { importStatus('Bitte den ganzen Rezepttext einfügen.', true); return; }
+    if (saveFormattedRecipes(text)) { $('#importDialog').close(); return; }
     runImport({ text }, 'text');
   });
   $('#importDialog').addEventListener('click', (e) => {
@@ -2900,9 +2961,29 @@ function bindEvents() {
   });
 
 
+  // Rezept einfügen (fertiges Rezept aus ChatGPT/Claude)
+  $('#pasteCancel').addEventListener('click', () => $('#pasteDialog').close());
+  $('#pasteForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = $('#pasteText').value.trim();
+    if (!text) { pasteStatus('Halte den Finger ins Feld und tippe auf „Einfügen“.', true); return; }
+    if (saveFormattedRecipes(text)) { $('#pasteDialog').close(); return; }
+    pasteStatus('Das sieht nicht wie ein fertiges Rezept aus. Bitte die ganze Antwort von „Rezept für Mama“ kopieren und hier einfügen.', true);
+  });
+  $('#pasteDialog').addEventListener('click', (e) => {
+    if (e.target === $('#pasteDialog')) $('#pasteDialog').close();
+  });
+
   // Eingabe
   els.form.addEventListener('submit', (e) => {
     e.preventDefault();
+    // Versehentlich ein ganzes Rezept ins Einkaufsfeld eingefügt → ins Kochbuch statt auf die Liste
+    if (saveFormattedRecipes(els.input.value)) {
+      els.input.value = '';
+      autoGrow();
+      updateSuggestions();
+      return;
+    }
     if (addFromText(els.input.value)) {
       els.input.value = '';
       autoGrow();
