@@ -73,7 +73,12 @@ jobs:
       - name: Webseite zusammenstellen
         run: |
           mkdir -p _site
-          cp -r index.html style.css app.js categories.js config.js wissen.js manifest.json sw.js .nojekyll icons data _site/
+          # Alle App-Dateien (*.js im Hauptordner) mitnehmen, damit neue Dateien nicht vergessen werden
+          cp -r index.html style.css ./*.js manifest.json .nojekyll icons data _site/
+          # Sicherheitsnetz: Jede Datei, die die App lädt, muss im Paket sein – sonst bleibt die App bei „Verbinde …“ hängen
+          for f in $(grep -ohE "from '\./[^']+'" _site/*.js | sed -E "s/from '\.\/(.*)'/\1/" | sort -u); do
+            if [ ! -f "_site/$f" ]; then echo "::error::$f fehlt im Paket"; exit 1; fi
+          done
 
       - name: Pages konfigurieren
         uses: actions/configure-pages@v5
