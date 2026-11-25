@@ -90,6 +90,11 @@ function writeJSON(key, value) {
   }
 }
 
+/** Abbruch-Signal nach `ms` (ältere Browser ohne AbortSignal.timeout: kein Abbruch). */
+function timeoutSignal(ms) {
+  try { return AbortSignal.timeout(ms); } catch { return undefined; }
+}
+
 function makeId() {
   if (crypto.randomUUID) return crypto.randomUUID().replace(/-/g, '').slice(0, 20);
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
@@ -255,8 +260,35 @@ class FirebaseBackend {
     this.ready = this.init().catch((err) => {
       console.error('[Firebase] Start fehlgeschlagen:', err);
       onStatus(navigator.onLine ? 'error' : 'offline');
+      this.retryStart();
       throw err;
     });
+    this.ready.catch(() => { /* wird bei Schreibvorgängen gemeldet */ });
+  }
+
+  /** Start fehlgeschlagen (z. B. kurz kein Netz) → bei Verbindung bzw. nach 15 s erneut versuchen. */
+  retryStart() {
+    if (this.app || this.retrying) return;
+    this.retrying = true;
+    const go = () => {
+      window.removeEventListener('online', go);
+      clearTimeout(timer);
+      this.retrying = false;
+      this.start(this.onItems, this.onStatus);
+    };
+    const timer = setTimeout(go, 15000);
+    window.addEventListener('online', go);
+  }
+
+  /** Wartet auf den Firebase-Start. Klappt er nicht, Hinweis statt stillem Datenverlust. */
+  async whenReady() {
+    try {
+      await this.ready;
+      return true;
+    } catch {
+      showToast('Keine Verbindung zur gemeinsamen Liste – bitte gleich nochmal versuchen.');
+      return false;
+    }
   }
 
   async init() {
@@ -268,6 +300,7 @@ class FirebaseBackend {
     this.fs = fs;
 
     const app = appMod.initializeApp(firebaseConfig);
+    this.app = app;
     try {
       this.db = fs.initializeFirestore(app, {
         localCache: fs.persistentLocalCache({ tabManager: fs.persistentMultipleTabManager() })
@@ -281,6 +314,7 @@ class FirebaseBackend {
 
     if (authMod) {
       const auth = authMod.getAuth(app);
+      this.auth = auth;
       // Gespeicherte (anonyme) Anmeldung abwarten
       await new Promise((resolve) => {
         const off = authMod.onAuthStateChanged(auth, () => { off(); resolve(); });
@@ -320,6 +354,7 @@ class FirebaseBackend {
       (err) => {
         console.error('[Firebase] Listener-Fehler:', err);
         this.listenerFailed = true;
+        if (err.code !== 'permission-denied') this.resubscribeLater();
         this.onStatus('error', err.code === 'permission-denied'
           ? 'Kein Zugriff – Firestore-Regeln / Anonym-Login prüfen'
           : undefined);
@@ -346,6 +381,14 @@ class FirebaseBackend {
     Object.keys(this.mapHandlers || {}).forEach((name) => this.subscribeMap(name));
   }
 
+  resubscribeLater() {
+    if (this.resubscribeTimer) return;
+    this.resubscribeTimer = setTimeout(() => {
+      this.resubscribeTimer = null;
+      this.subscribe();
+    }, 10000);
+  }
+
   /** Echtzeit-Abo einer Sammlung lists/{LIST_ID}/{name}. Fehlt die Regel → Gerät. */
   subscribeMap(name) {
     const { fs } = this;
@@ -365,7 +408,10 @@ class FirebaseBackend {
       (err) => {
         console.warn(`[Firebase] ${name} nicht lesbar:`, err.code || err);
         this.mapFailed[name] = true;
-        if (err.code === 'permission-denied') this.useLocalMap(name);
+        // Nur wenn angemeldet: dann fehlt wirklich die Firestore-Regel. Ohne Anmeldung
+        // (z. B. kurz offline) nicht ausweichen – sonst wirkt das Kochbuch leer.
+        if (err.code === 'permission-denied' && (!this.auth || this.auth.currentUser)) this.useLocalMap(name);
+        else if (err.code !== 'permission-denied') this.resubscribeLater();
       }
     );
   }
@@ -388,7 +434,7 @@ class FirebaseBackend {
       this.mapLocal[name].set(changes);
       return;
     }
-    await this.ready;
+    if (!(await this.whenReady())) return;
     const col = this.fs.collection(this.db, 'lists', LIST_ID, name);
     const batch = this.fs.writeBatch(this.db);
     for (const [id, entry] of Object.entries(changes)) {
@@ -398,12 +444,8 @@ class FirebaseBackend {
     }
     batch.commit().catch((err) => {
       console.error(`[Firebase] ${name} speichern fehlgeschlagen:`, err);
-      if (err.code === 'permission-denied') {
-        this.useLocalMap(name);
-        this.mapLocal[name].set(changes);
-      } else {
-        showToast('Konnte ich gerade nicht speichern – bitte nochmal versuchen.');
-      }
+      // Lesen klappt (sonst wären wir schon auf dem Handy) → nur dieser Eintrag wurde abgelehnt
+      showToast('Konnte ich gerade nicht speichern – bitte nochmal versuchen.');
     });
   }
 
@@ -415,7 +457,7 @@ class FirebaseBackend {
   }
 
   async setOffers(changes) {
-    await this.ready;
+    if (!(await this.whenReady())) return;
     const batch = this.fs.writeBatch(this.db);
     for (const [key, offer] of Object.entries(changes)) {
       const ref = this.fs.doc(this.offersCol, key);
@@ -443,19 +485,19 @@ class FirebaseBackend {
   }
 
   async add(items) {
-    await this.ready;
+    if (!(await this.whenReady())) return;
     const batch = this.fs.writeBatch(this.db);
     items.forEach(({ id, ...data }) => batch.set(this.ref(id), data));
     this.run(batch.commit());
   }
 
   async update(id, patch) {
-    await this.ready;
+    if (!(await this.whenReady())) return;
     this.run(this.fs.updateDoc(this.ref(id), patch));
   }
 
   async remove(ids) {
-    await this.ready;
+    if (!(await this.whenReady())) return;
     const batch = this.fs.writeBatch(this.db);
     ids.forEach((id) => batch.delete(this.ref(id)));
     this.run(batch.commit());
@@ -2250,6 +2292,7 @@ async function runImport(payload, herkunft) {
   $$('#importDialog button, #importDialog input, #importDialog textarea').forEach((el) => { el.disabled = true; });
   try {
     const res = await fetch(`${CHAT_URL.replace(/\/$/, '')}/rezept`, {
+      signal: timeoutSignal(90000),
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Familien-Code': readJSON(CODE_LS, '') },
       body: JSON.stringify(payload)
@@ -2720,6 +2763,7 @@ async function sendChat(text) {
   const liste = state.items.filter((i) => !i.done).map((i) => `${i.qty ? `${i.qty} ` : ''}${i.name}`);
   try {
     const res = await fetch(`${CHAT_URL.replace(/\/$/, '')}/chat`, {
+      signal: timeoutSignal(90000),
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Familien-Code': readJSON(CODE_LS, '') },
       body: JSON.stringify({ messages: history, liste, wissen: (state.wissen || []).map((w) => w.text) })
@@ -3330,6 +3374,7 @@ async function recoverFromStartError(err) {
 
 try {
   init();
+  window.__appStarted = true;
 } catch (err) {
   recoverFromStartError(err);
 }

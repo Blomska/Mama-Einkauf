@@ -23,6 +23,10 @@ import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// Kein Abruf darf ewig hängen (sonst blockiert der ganze Lauf): 30 s je Anfrage
+const nativeFetch = globalThis.fetch;
+globalThis.fetch = (url, opts = {}) => nativeFetch(url, { signal: AbortSignal.timeout(30000), ...opts });
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT_FILE = resolve(ROOT, 'data/prospekte.json');
 

@@ -18,6 +18,35 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap">
   <link rel="stylesheet" href="style.css">
+  <script>
+    // Startwächter: Läuft die App nach 12 Sekunden nicht (z. B. Datei fehlt nach einem Update),
+    // einmal automatisch reparieren (Zwischenspeicher leeren, neu laden), sonst Knopf zeigen.
+    (function () {
+      var KEY = 'einkauf:waechter';
+      function repair() {
+        try { sessionStorage.setItem(KEY, String(Date.now())); } catch (e) {}
+        var jobs = [];
+        if (window.caches) jobs.push(caches.keys().then(function (keys) {
+          return Promise.all(keys.filter(function (k) { return k.indexOf('einkauf-app-') === 0; }).map(function (k) { return caches.delete(k); }));
+        }));
+        if (navigator.serviceWorker) jobs.push(navigator.serviceWorker.getRegistration('./').then(function (r) { return r && r.unregister(); }));
+        Promise.all(jobs).catch(function () {}).then(function () { location.reload(); });
+      }
+      window.einkaufRepair = repair;
+      setTimeout(function () {
+        if (window.__appStarted) return;
+        var last = 0;
+        try { last = Number(sessionStorage.getItem(KEY)) || 0; } catch (e) {}
+        if (Date.now() - last > 120000) { repair(); return; }
+        var bar = document.createElement('div');
+        bar.setAttribute('role', 'alert');
+        bar.style.cssText = 'position:fixed;left:12px;right:12px;bottom:calc(16px + env(safe-area-inset-bottom));z-index:9999;padding:14px 16px;border-radius:16px;background:#2b2433;color:#fff;font:600 16px/1.35 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.25)';
+        bar.innerHTML = 'Die App startet gerade nicht richtig.<br><button type="button" style="margin-top:10px;width:100%;padding:12px;border:0;border-radius:12px;background:#fff;color:#2b2433;font:700 16px system-ui,sans-serif">Reparieren &amp; neu laden</button>';
+        bar.querySelector('button').onclick = repair;
+        document.body.appendChild(bar);
+      }, 12000);
+    })();
+  </script>
   <script type="module" src="app.js"></script>
 </head>
 <body>
