@@ -3305,4 +3305,31 @@ function init() {
   handleSharedRecipe();
 }
 
-init();
+/**
+ * Passen Seite (index.html) und Programmcode nach einem Update nicht zusammen
+ * (z. B. alte Seite aus dem Zwischenspeicher), bricht der Start ab. Dann einmal
+ * die App-Zwischenspeicher leeren und neu laden, statt bei „Verbinde …" hängen zu bleiben.
+ */
+async function recoverFromStartError(err) {
+  console.error('[Start] fehlgeschlagen:', err);
+  const KEY = 'einkauf:start-reload';
+  let last = 0;
+  try { last = Number(sessionStorage.getItem(KEY)) || 0; } catch { /* egal */ }
+  if (Date.now() - last > 60000) {
+    try { sessionStorage.setItem(KEY, String(Date.now())); } catch { /* egal */ }
+    try {
+      const keys = await caches.keys();
+      await Promise.all(keys.filter((k) => k.startsWith('einkauf-app-')).map((k) => caches.delete(k)));
+    } catch { /* egal */ }
+    location.reload();
+    return;
+  }
+  const text = document.querySelector('.sync__text');
+  if (text) text.textContent = 'Update hängt – bitte App schließen und neu öffnen';
+}
+
+try {
+  init();
+} catch (err) {
+  recoverFromStartError(err);
+}

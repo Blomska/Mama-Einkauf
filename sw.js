@@ -13,7 +13,7 @@
  * ------------------------------------------------------------------
  */
 
-const CACHE_VERSION = 'v14';
+const CACHE_VERSION = 'v15';
 const APP_CACHE = `einkauf-app-${CACHE_VERSION}`;
 const CDN_CACHE = 'einkauf-cdn-v1';
 
@@ -104,7 +104,9 @@ const NETWORK_TIMEOUT_MS = 3000;
 
 async function networkFirst(request) {
   const cache = await caches.open(APP_CACHE);
-  const network = fetch(request).then((response) => {
+  // no-cache: nie eine veraltete Seite aus dem Browser-Zwischenspeicher nehmen,
+  // sonst passen nach einem Update Seite und Programmcode nicht zusammen
+  const network = fetch(request, { cache: 'no-cache' }).then((response) => {
     if (response.ok) cache.put(request, response.clone());
     return response;
   });
