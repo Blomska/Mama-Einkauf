@@ -27,11 +27,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Code holen
         uses: actions/checkout@v4
@@ -88,6 +85,15 @@ jobs:
         with:
           path: _site
 
+  # Eigener Schritt wie in der GitHub-Vorlage: Das Veröffentlichen im selben
+  # Job fand das hochgeladene Paket öfter nicht ("No artifacts named github-pages").
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - name: Veröffentlichen
         id: deployment
         uses: actions/deploy-pages@v4
