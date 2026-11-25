@@ -336,6 +336,23 @@
     </div>
   </dialog>
 
+  <!-- Fertiges Rezept einfügen (aus ChatGPT/Claude „Rezept für Mama“) -->
+  <dialog id="pasteDialog" class="sheet" aria-labelledby="pasteTitle">
+    <div class="sheet__inner">
+      <div class="sheet__handle" aria-hidden="true"></div>
+      <h2 id="pasteTitle" tabindex="-1" autofocus>Rezept einfügen</h2>
+      <p class="sheet__hint">Halte den Finger in das Feld und tippe auf „Einfügen“. Dann auf „Ins Kochbuch“.</p>
+      <form id="pasteForm" class="import__text" autocomplete="off">
+        <textarea id="pasteText" rows="6" maxlength="20000" placeholder="Hier das Rezept einfügen" aria-label="Rezept"></textarea>
+        <p class="import__status" id="pasteStatus" role="status" hidden></p>
+        <div class="sheet__actions">
+          <button type="button" class="btn btn--ghost" id="pasteCancel">Schließen</button>
+          <button type="submit" class="btn btn--primary">📖 Ins Kochbuch</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
+
   <!-- Kochmodus: Schritt für Schritt, Display bleibt an -->
   <dialog id="cookDialog" class="viewer cook" aria-labelledby="cookTitle">
     <div class="viewer__head">

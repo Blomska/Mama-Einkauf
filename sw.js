@@ -13,7 +13,7 @@
  * ------------------------------------------------------------------
  */
 
-const CACHE_VERSION = 'v13';
+const CACHE_VERSION = 'v14';
 const APP_CACHE = `einkauf-app-${CACHE_VERSION}`;
 const CDN_CACHE = 'einkauf-cdn-v1';
 
@@ -25,6 +25,7 @@ const APP_SHELL = [
   './categories.js',
   './config.js',
   './wissen.js',
+  './rezeptformat.js',
   './manifest.json',
   './icons/icon.svg',
   './icons/icon-192.png',

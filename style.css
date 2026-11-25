@@ -1312,3 +1312,4 @@ h1, h2, h3, .btn, .chip, .tab { font-family: var(--font); }
 .cook__nav { display: flex; gap: 10px; padding: 12px 16px calc(14px + var(--safe-bottom)); border-top: 1px solid var(--line); background: var(--card); }
 .cook__nav .btn { flex: 1; min-height: 60px; font-size: 20px; }
 .cook__nav .btn:disabled { opacity: .4; }
+.kb__import + .kb__import { margin-top: -6px; }
