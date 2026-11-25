@@ -1229,6 +1229,7 @@ async function loadProspekte() {
   }
   autoOfferCache.clear();
   render();
+  if (state.view === 'rezepte') renderRecipes();
 }
 
 function flyerFor(store, week = 'current') {
@@ -1785,13 +1786,14 @@ function addToKochbuch(recipe, herkunft) {
     showToast(`„${recipe.titel}“ ist schon im Kochbuch 📖`);
     return false;
   }
-  backend.setMap('kochbuch', { [makeId()]: kochbuchEntry(recipe, herkunft) });
+  const id = makeId();
+  backend.setMap('kochbuch', { [id]: kochbuchEntry(recipe, herkunft) });
   showToast(`📖 „${recipe.titel}“ steht jetzt im Kochbuch`, {
     label: 'Ansehen',
     onClick: () => { state.rezepteTab = 'kochbuch'; showView('rezepte'); }
   });
   vibrate(15);
-  return true;
+  return id;
 }
 
 function updateKochbuch(id, patch) {
@@ -1810,6 +1812,37 @@ function removeFromKochbuch(id) {
     label: 'Rückgängig',
     onClick: () => backend.setMap('kochbuch', { [id]: data })
   });
+}
+
+/* ---------- Passt zu den Angeboten ---------- */
+
+/** Angebot für eine Zutat – auch über das letzte Wort ("Griechischer Joghurt" → "Joghurt"). */
+function ingredientOffer(z) {
+  if (!z?.name || z.vorrat) return null;
+  const direct = getOffer(z.name);
+  if (direct) return direct;
+  const words = String(z.name).split(/\s+/).filter(Boolean);
+  const last = words[words.length - 1];
+  return words.length > 1 && last.length >= 4 ? getOffer(last) : null;
+}
+
+/** Zutaten eines Rezepts, die gerade im Angebot sind: [{ z, offer }] */
+function recipeDeals(r) {
+  return (r.zutaten || [])
+    .map((z) => ({ z, offer: ingredientOffer(z) }))
+    .filter((d) => d.offer);
+}
+
+/** Kochbuch-Rezepte mit mindestens einer Zutat im Angebot – die meisten Treffer zuerst. */
+function matchingRecipes() {
+  return (state.kochbuch || [])
+    .map((r) => {
+      const deals = recipeDeals(r);
+      const buyable = (r.zutaten || []).filter((z) => !z.vorrat).length || 1;
+      return { r, deals, buyable, share: deals.length / buyable };
+    })
+    .filter((m) => m.deals.length)
+    .sort((a, b) => b.deals.length - a.deals.length || b.share - a.share || Number(Boolean(b.r.favorit)) - Number(Boolean(a.r.favorit)));
 }
 
 /* ---------- Portionen umrechnen ---------- */
@@ -1857,12 +1890,19 @@ function recipeByKey(key) {
   return null;
 }
 
-/** Rezeptkarte. mode: "kochbuch" | "woche" | "chat" */
+/** Rezeptkarte. mode: "kochbuch" | "passt" | "woche" | "chat" */
 function recipeCardHtml(r, key, { mode = 'woche' } = {}) {
   const open = state.openRecipes.has(key);
   const onList = onListNames();
   const zutaten = Array.isArray(r.zutaten) ? r.zutaten : [];
-  const deals = zutaten.filter((z) => z.im_angebot);
+  const inBook = mode === 'kochbuch' || mode === 'passt';
+  // Kochbuch: Angebote immer aktuell nachschlagen. Woche/Chat: wie vom Helfer geliefert.
+  const liveDeals = inBook ? recipeDeals(r) : [];
+  const liveByName = new Map(liveDeals.map((d) => [d.z.name, d.offer]));
+  const deals = inBook
+    ? liveDeals.map(({ z, offer }) => ({ name: z.name, label: offerLabel(offer) }))
+    : zutaten.filter((z) => z.im_angebot).map((z) => ({ name: z.name, label: z.preis }));
+  const buyable = zutaten.filter((z) => !z.vorrat).length || 1;
   const base = Number(r.portionen) || 4;
   const persons = portionsFor(key, r);
   const factor = persons / base;
@@ -1871,18 +1911,21 @@ function recipeCardHtml(r, key, { mode = 'woche' } = {}) {
   const ingredients = zutaten.map((z, zi) => {
     const already = onList.has(normalize(applyWissen(z.name)));
     const checked = !z.vorrat && !already;
+    const live = liveByName.get(z.name);
+    const dealText = live ? offerLabel(live) : !inBook && z.im_angebot ? `${STORE_LABELS[z.laden] || ''} ${z.preis}` : '';
     return `
         <label class="ingr">
           <input type="checkbox" data-recipe="${k}" data-ingr="${zi}" ${checked ? 'checked' : ''}>
           <span>${escapeHtml(z.name)}
-            ${z.im_angebot ? `<br><span class="ingr__deal">🏷️ ${escapeHtml(STORE_LABELS[z.laden] || '')} ${escapeHtml(z.preis)}</span>` : ''}
+            ${dealText ? `<br><span class="ingr__deal">🏷️ ${escapeHtml(dealText.trim())}</span>` : ''}
             ${already ? '<br><span class="ingr__deal" style="color:var(--primary-dark)">✓ steht schon drauf</span>' : ''}
           </span>
           <span class="ingr__menge">${escapeHtml(scaleMenge(z.menge, factor))}${z.vorrat ? '<br><small>(Vorrat)</small>' : ''}</span>
         </label>`;
   }).join('');
 
-  const saved = mode === 'kochbuch' || inKochbuch(r.titel);
+  const saved = inBook || inKochbuch(r.titel);
+  const hasSteps = (r.schritte || []).length > 0;
   return `
       <article class="recipe${mode === 'chat' ? ' recipe--chat' : ''}${r.favorit ? ' is-fav' : ''}">
         <div class="recipe__top">
@@ -1891,14 +1934,15 @@ function recipeCardHtml(r, key, { mode = 'woche' } = {}) {
             <h3 class="recipe__title">${escapeHtml(r.titel)}</h3>
             <p class="recipe__meta">⏱ ${Number(r.dauer_minuten) || '?'} Min · 👥 ${base} Portionen · ${escapeHtml(r.schwierigkeit || 'einfach')}</p>
           </div>
-          ${mode === 'kochbuch' ? `
+          ${inBook ? `
           <button type="button" class="recipe__fav" data-kb-fav="${escapeHtml(r.id)}" aria-pressed="${Boolean(r.favorit)}"
                   aria-label="${r.favorit ? 'Nicht mehr Lieblingsrezept' : 'Als Lieblingsrezept markieren'}">${r.favorit ? '❤️' : '🤍'}</button>` : ''}
         </div>
         <p class="recipe__desc">${escapeHtml(r.beschreibung || '')}</p>
-        ${mode === 'kochbuch' && r.notiz ? `<p class="recipe__note">📝 ${escapeHtml(r.notiz)}</p>` : ''}
-        ${deals.length ? `<div class="recipe__deals">${deals.slice(0, 4).map((z) => `<span class="recipe__deal">🏷️ ${escapeHtml(z.name)} ${escapeHtml(z.preis)}</span>`).join('')}</div>` : ''}
-        ${mode !== 'kochbuch' ? `
+        ${inBook && r.notiz ? `<p class="recipe__note">📝 ${escapeHtml(r.notiz)}</p>` : ''}
+        ${mode === 'passt' ? `<p class="recipe__match">🏷️ ${deals.length} von ${buyable} Zutaten gerade im Angebot</p>` : ''}
+        ${deals.length ? `<div class="recipe__deals">${deals.slice(0, 5).map((d) => `<span class="recipe__deal">🏷️ ${escapeHtml(d.name)} · ${escapeHtml(d.label)}</span>`).join('')}</div>` : ''}
+        ${!inBook ? `
         <div class="recipe__save">
           ${saved
             ? '<span class="recipe__saved">📖 Steht im Kochbuch</span>'
@@ -1919,9 +1963,11 @@ function recipeCardHtml(r, key, { mode = 'woche' } = {}) {
           <h4>Zutaten</h4>
           ${ingredients}
           <button type="button" class="btn btn--primary btn--block recipe__add" data-recipe-add="${k}">🛒 Ausgewählte auf die Liste</button>
+          ${hasSteps ? `
           <h4>Zubereitung</h4>
-          <ol class="steps">${(r.schritte || []).map((st) => `<li>${escapeHtml(st)}</li>`).join('')}</ol>
-          ${mode === 'kochbuch' ? `
+          <button type="button" class="btn btn--cook btn--block" data-cook="${k}">👩‍🍳 Jetzt kochen – Schritt für Schritt</button>
+          <ol class="steps">${(r.schritte || []).map((st) => `<li>${escapeHtml(st)}</li>`).join('')}</ol>` : ''}
+          ${inBook ? `
           <h4>📝 Meine Notiz</h4>
           <textarea class="recipe__notefield" data-kb-note="${escapeHtml(r.id)}" rows="2" maxlength="500"
                     placeholder="z. B. weniger Salz, Papa mag mehr Knoblauch">${escapeHtml(r.notiz || '')}</textarea>
@@ -1939,16 +1985,34 @@ function renderRecipes() {
   const book = state.kochbuch || [];
   if (!state.rezepteTab) state.rezepteTab = book.length ? 'kochbuch' : 'woche';
   const tab = state.rezepteTab;
+  const matches = matchingRecipes();
 
   els.recipesSub.textContent = tab === 'kochbuch'
     ? 'Eure gesammelten Lieblingsrezepte – für die ganze Familie.'
-    : 'Ideen aus den aktuellen Angeboten. Gefällt dir eins? Mit ⭐ ins Kochbuch.';
+    : tab === 'passt'
+      ? 'Rezepte aus deinem Kochbuch, für die gerade Zutaten im Angebot sind.'
+      : 'Ideen aus den aktuellen Angeboten. Gefällt dir eins? Mit ⭐ ins Kochbuch.';
 
   const tabs = `
     <div class="seg seg--recipes" role="tablist" aria-label="Rezepte">
-      <button type="button" role="tab" data-rtab="kochbuch" class="${tab === 'kochbuch' ? 'is-active' : ''}" aria-selected="${tab === 'kochbuch'}">📖 Mein Kochbuch <small>${book.length}</small></button>
-      <button type="button" role="tab" data-rtab="woche" class="${tab === 'woche' ? 'is-active' : ''}" aria-selected="${tab === 'woche'}">🗓️ Ideen der Woche <small>${week.length}</small></button>
+      <button type="button" role="tab" data-rtab="kochbuch" class="${tab === 'kochbuch' ? 'is-active' : ''}" aria-selected="${tab === 'kochbuch'}">📖 Kochbuch <small>${book.length}</small></button>
+      <button type="button" role="tab" data-rtab="passt" class="${tab === 'passt' ? 'is-active' : ''}" aria-selected="${tab === 'passt'}">🏷️ Im Angebot <small>${matches.length}</small></button>
+      <button type="button" role="tab" data-rtab="woche" class="${tab === 'woche' ? 'is-active' : ''}" aria-selected="${tab === 'woche'}">🗓️ Ideen <small>${week.length}</small></button>
     </div>`;
+  const importBtn = CHAT_URL
+    ? '<button type="button" class="btn btn--ghost btn--block kb__import" data-import-open>📷 Rezept aus Foto oder Link holen</button>'
+    : '';
+
+  if (tab === 'passt') {
+    els.recipes.innerHTML = tabs + (matches.length
+      ? matches.map((m) => recipeCardHtml(m.r, `k-${m.r.id}`, { mode: 'passt' })).join('')
+      : `<div class="empty-card"><div class="big" aria-hidden="true">🏷️</div>
+          <p><strong>${book.length ? 'Gerade passt nichts' : 'Noch keine Rezepte im Kochbuch'}</strong></p>
+          <p>${book.length
+            ? 'Diese Woche ist keine Zutat aus deinem Kochbuch im Angebot. Je mehr Rezepte im Kochbuch stehen, desto öfter passt etwas.'
+            : 'Sobald Rezepte im Kochbuch stehen, zeigt die App hier, welche davon gerade günstig zu kochen sind.'}</p></div>`);
+    return;
+  }
 
   if (tab === 'woche') {
     const until = state.rezepte?.gueltigBis;
@@ -1968,8 +2032,9 @@ function renderRecipes() {
         <div class="big" aria-hidden="true">📖</div>
         <p><strong>Dein Kochbuch ist noch leer.</strong></p>
         <p>Tippe bei einem Rezept auf „⭐ Ins Kochbuch“ – in den Ideen der Woche oder beim Küchenhelfer.
-        Eigene Rezepte (z. B. von Oma) erzählst du einfach dem Helfer.</p>
-        <button type="button" class="btn btn--primary" data-rtab="woche">🗓️ Ideen der Woche ansehen</button>
+        Ein Rezept aus einem Kochbuch oder einer Zeitschrift kannst du auch einfach abfotografieren.</p>
+        ${importBtn}
+        <button type="button" class="btn btn--primary" data-rtab="woche" style="margin-top:8px">🗓️ Ideen der Woche ansehen</button>
         <button type="button" class="btn btn--ghost" data-nav="helfer" style="margin-top:8px">💬 Eigenes Rezept eintragen</button>
       </div>`;
     return;
@@ -1981,7 +2046,7 @@ function renderRecipes() {
   if (!['alle', 'lieblinge', ...cats.map((c) => c.id)].includes(filter)) state.kbFilter = 'alle';
   const chip = (id, label) => `<button type="button" class="kbchip${(state.kbFilter || 'alle') === id ? ' is-active' : ''}" data-kb-filter="${escapeHtml(id)}">${label}</button>`;
 
-  els.recipes.innerHTML = tabs + `
+  els.recipes.innerHTML = tabs + importBtn + `
     <div class="kb__tools">
       <input type="search" id="kbSearch" placeholder="🔍 Im Kochbuch suchen …" value="${escapeHtml(state.kbSearch || '')}" aria-label="Im Kochbuch suchen" autocomplete="off">
       <div class="kb__filters">
@@ -2078,6 +2143,9 @@ function handleRecipeClick(e, container) {
     renderRecipes();
     return true;
   }
+  if (t.closest('[data-import-open]')) { openImportDialog(); return true; }
+  const cookBtn = t.closest('[data-cook]');
+  if (cookBtn) { openCook(cookBtn.dataset.cook); return true; }
   const toggle = t.closest('[data-recipe-toggle]');
   if (toggle) {
     const key = toggle.dataset.recipeToggle;
@@ -2125,6 +2193,252 @@ function handleRecipeClick(e, container) {
     return true;
   }
   return false;
+}
+
+/* ---------- Rezept aus Foto, Link oder Text ---------- */
+
+function importStatus(text, error = false) {
+  const el = $('#importStatus');
+  el.hidden = !text;
+  el.textContent = text || '';
+  el.classList.toggle('is-error', error);
+}
+
+function openImportDialog(prefill = '') {
+  if (!CHAT_URL) { showToast('Dafür muss der Küchenhelfer eingerichtet sein.'); return false; }
+  if (!readJSON(CODE_LS, '')) {
+    showToast('Bitte einmal beim Helfer den Familien-Code eingeben.');
+    showView('helfer');
+    return false;
+  }
+  importStatus('');
+  $('#importLink').value = prefill;
+  $('#importText').value = '';
+  const dlg = $('#importDialog');
+  if (!dlg.open) dlg.showModal();
+  return true;
+}
+
+/** Foto verkleinern (max. 1600 px, JPEG) → base64 ohne Präfix. */
+async function photoBase64(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = reject;
+      i.src = url;
+    });
+    const scale = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(img.naturalWidth * scale);
+    canvas.height = Math.round(img.naturalHeight * scale);
+    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/jpeg', 0.82).split(',')[1];
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+let importBusy = false;
+
+async function runImport(payload, herkunft) {
+  if (importBusy) return;
+  importBusy = true;
+  importStatus(payload.bild ? 'Ich lese das Foto … (dauert ein paar Sekunden)' : 'Ich lese das Rezept …');
+  $$('#importDialog button, #importDialog input, #importDialog textarea').forEach((el) => { el.disabled = true; });
+  try {
+    const res = await fetch(`${CHAT_URL.replace(/\/$/, '')}/rezept`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Familien-Code': readJSON(CODE_LS, '') },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401) {
+      chat.needsCode = true;
+      importStatus('Der Familien-Code stimmt nicht – bitte beim Helfer neu eingeben.', true);
+    } else if (!res.ok || !data.rezept) {
+      importStatus(data.fehler || 'Das hat nicht geklappt. Bitte nochmal versuchen.', true);
+    } else {
+      const r = data.rezept;
+      const recipe = {
+        ...r,
+        beschreibung: [r.beschreibung, payload.link ? `Quelle: ${payload.link}` : ''].filter(Boolean).join(' ').slice(0, 300)
+      };
+      const id = addToKochbuch(recipe, herkunft);
+      $('#importDialog').close();
+      if (id) {
+        if (data.hinweis) updateKochbuch(id, { notiz: data.hinweis });
+        state.rezepteTab = 'kochbuch';
+        state.kbFilter = 'alle';
+        state.kbSearch = '';
+        state.openRecipes.add(`k-${id}`);
+        showView('rezepte');
+      }
+    }
+  } catch {
+    importStatus('Keine Verbindung – bist du online?', true);
+  }
+  $$('#importDialog button, #importDialog input, #importDialog textarea').forEach((el) => { el.disabled = false; });
+  importBusy = false;
+}
+
+/** Über „Teilen“ aus einer anderen App (z. B. Chefkoch) geöffnet → Rezept holen. */
+function handleSharedRecipe() {
+  const params = new URLSearchParams(location.search);
+  if (!params.has('url') && !params.has('text') && !params.has('title')) return;
+  const all = [params.get('url'), params.get('text'), params.get('title')].filter(Boolean).join(' ');
+  history.replaceState(null, '', location.pathname);
+  const link = all.match(/https?:\/\/\S+/)?.[0] || '';
+  state.rezepteTab = 'kochbuch';
+  showView('rezepte');
+  setTimeout(() => {
+    if (!openImportDialog(link)) return;
+    if (link) runImport({ link }, 'link');
+    else if (all.trim()) $('#importText').value = all.trim();
+  }, 300);
+}
+
+/* ---------- Kochmodus (Schritt für Schritt) ---------- */
+
+const cook = { recipe: null, key: '', step: 0, factor: 1, timers: [], tick: null, wakeLock: null, audio: null };
+
+/** Zeitangaben in einem Schritt finden: „10 Minuten", „5–7 Min.", „1 Stunde", „1,5 Std." */
+function stepDurations(text) {
+  const out = [];
+  const re = /(\d+(?:[.,]\d+)?)(?:\s*(?:-|–|bis)\s*(\d+(?:[.,]\d+)?))?\s*(sekunden|sekunde|sek\.?|minuten|minute|min\.?|stunden|stunde|std\.?)(?![a-zäöü])/gi;
+  for (const m of String(text).matchAll(re)) {
+    const value = Number((m[2] || m[1]).replace(',', '.'));
+    const unit = m[3].toLowerCase();
+    const sec = unit.startsWith('s') && !unit.startsWith('st') ? value : unit.startsWith('st') ? value * 3600 : value * 60;
+    if (sec >= 10 && sec <= 6 * 3600) out.push({ label: m[0].trim(), sec: Math.round(sec) });
+  }
+  return out;
+}
+
+function formatTimer(sec) {
+  const s = Math.max(0, Math.round(sec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = String(s % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${r}` : `${m}:${r}`;
+}
+
+async function keepScreenOn(on) {
+  try {
+    if (on && 'wakeLock' in navigator && !cook.wakeLock) {
+      cook.wakeLock = await navigator.wakeLock.request('screen');
+      cook.wakeLock.addEventListener('release', () => { cook.wakeLock = null; });
+    } else if (!on && cook.wakeLock) {
+      await cook.wakeLock.release();
+      cook.wakeLock = null;
+    }
+  } catch { /* nicht unterstützt – egal */ }
+}
+
+function openCook(key) {
+  const recipe = recipeByKey(key);
+  if (!recipe || !(recipe.schritte || []).length) return;
+  cook.recipe = recipe;
+  cook.key = key;
+  cook.step = 0;
+  cook.factor = portionsFor(key, recipe) / (Number(recipe.portionen) || 4);
+  $('#cookTitle').textContent = recipe.titel;
+  renderCook();
+  const dlg = $('#cookDialog');
+  if (!dlg.open) dlg.showModal();
+  keepScreenOn(true);
+  // iOS: Ton erst nach einer Berührung freigeben
+  try {
+    if (!cook.audio) cook.audio = new (window.AudioContext || window.webkitAudioContext)();
+    cook.audio.resume();
+  } catch { cook.audio = null; }
+}
+
+function renderCook() {
+  const r = cook.recipe;
+  if (!r) return;
+  const steps = r.schritte;
+  const total = steps.length + 1; // Schritt 0 = Zutaten
+  const i = cook.step;
+  $('#cookProgress').innerHTML = Array.from({ length: total }, (_, n) => `<span class="${n <= i ? 'is-done' : ''}"></span>`).join('');
+  let html;
+  if (i === 0) {
+    const persons = portionsFor(cook.key, r);
+    html = `
+      <p class="cook__count">Das brauchst du – für ${persons} Person${persons === 1 ? '' : 'en'}</p>
+      <ul class="cook__ingr">${(r.zutaten || []).map((z) => `
+        <li><span>${escapeHtml(z.name)}</span><span>${escapeHtml(scaleMenge(z.menge, cook.factor))}</span></li>`).join('')}
+      </ul>`;
+  } else if (i <= steps.length) {
+    const text = steps[i - 1];
+    const durations = stepDurations(text);
+    html = `
+      <p class="cook__count">Schritt ${i} von ${steps.length}</p>
+      <p class="cook__step">${escapeHtml(text)}</p>
+      ${durations.length ? `<div class="cook__timerbtns">${durations.map((d) => `
+        <button type="button" class="btn btn--timer" data-cook-timer="${d.sec}" data-cook-label="${escapeHtml(d.label)}">⏱ Timer ${escapeHtml(d.label)}</button>`).join('')}</div>` : ''}`;
+  } else {
+    html = `<p class="cook__done">Guten Appetit! 🍽️</p>`;
+  }
+  $('#cookBody').innerHTML = html;
+  $('#cookBody').scrollTop = 0;
+  $('#cookPrev').disabled = i === 0;
+  $('#cookNext').textContent = i === 0 ? 'Los geht’s ▶' : i < steps.length ? 'Weiter ▶' : i === steps.length ? 'Fertig ✓' : 'Schließen';
+  renderCookTimers();
+}
+
+function renderCookTimers() {
+  const wrap = $('#cookTimers');
+  wrap.hidden = !cook.timers.length;
+  wrap.innerHTML = cook.timers.map((t) => {
+    const left = (t.end - Date.now()) / 1000;
+    return `<button type="button" class="cook__timer${left <= 0 ? ' is-ringing' : ''}" data-cook-stop="${t.id}" aria-label="Timer ${escapeHtml(t.label)} ${left <= 0 ? 'ausschalten' : 'abbrechen'}">
+      ⏱ ${left <= 0 ? 'Fertig!' : formatTimer(left)} <small>${escapeHtml(t.label)}</small> ✕</button>`;
+  }).join('');
+}
+
+function beep() {
+  vibrate([300, 150, 300]);
+  const ctx = cook.audio;
+  if (!ctx) return;
+  try {
+    [0, 0.35, 0.7].forEach((at) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.frequency.value = 880;
+      g.gain.setValueAtTime(0.25, ctx.currentTime + at);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + at + 0.3);
+      o.connect(g).connect(ctx.destination);
+      o.start(ctx.currentTime + at);
+      o.stop(ctx.currentTime + at + 0.3);
+    });
+  } catch { /* ohne Ton */ }
+}
+
+function cookTick() {
+  const now = Date.now();
+  cook.timers.forEach((t) => {
+    if (!t.rung && t.end <= now) {
+      t.rung = true;
+      showToast(`Timer fertig: ${t.label}`);
+    }
+    if (t.rung && (now - t.end) < 60000 && Math.floor((now - t.end) / 1000) % 5 === 0) beep();
+  });
+  renderCookTimers();
+  if (!cook.timers.length) { clearInterval(cook.tick); cook.tick = null; }
+}
+
+function startCookTimer(sec, label) {
+  cook.timers.push({ id: makeId(), label, end: Date.now() + sec * 1000, rung: false });
+  if (!cook.tick) cook.tick = setInterval(cookTick, 1000);
+  renderCookTimers();
+  vibrate(15);
+}
+
+function closeCook() {
+  const dlg = $('#cookDialog');
+  if (dlg.open) dlg.close();
 }
 
 /* ---------- Familien-Gedächtnis ---------- */
@@ -2518,6 +2832,74 @@ function autoGrow() {
 }
 
 function bindEvents() {
+  // Rezept aus Foto, Link oder Text
+  $('#importCancel').addEventListener('click', () => $('#importDialog').close());
+  $('#importPhoto').addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      runImport({ bild: await photoBase64(file), mime: 'image/jpeg' }, 'foto');
+    } catch {
+      importStatus('Das Foto ließ sich nicht öffnen.', true);
+    }
+  });
+  $('#importLinkForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const link = $('#importLink').value.trim();
+    if (!/^https?:\/\//.test(link)) { importStatus('Bitte einen vollständigen Link (https://…) einfügen.', true); return; }
+    runImport({ link }, 'link');
+  });
+  $('#importTextForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = $('#importText').value.trim();
+    if (text.length < 30) { importStatus('Bitte den ganzen Rezepttext einfügen.', true); return; }
+    runImport({ text }, 'text');
+  });
+  $('#importDialog').addEventListener('click', (e) => {
+    if (e.target === $('#importDialog') && !importBusy) $('#importDialog').close();
+  });
+
+  // Kochmodus
+  $('#cookClose').addEventListener('click', closeCook);
+  $('#cookDialog').addEventListener('close', () => {
+    keepScreenOn(false);
+    cook.timers = [];
+    clearInterval(cook.tick);
+    cook.tick = null;
+  });
+  $('#cookPrev').addEventListener('click', () => { if (cook.step > 0) { cook.step -= 1; renderCook(); } });
+  $('#cookNext').addEventListener('click', () => {
+    if (cook.step > cook.recipe.schritte.length) { closeCook(); return; }
+    cook.step += 1;
+    renderCook();
+  });
+  $('#cookBody').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-cook-timer]');
+    if (btn) startCookTimer(Number(btn.dataset.cookTimer), btn.dataset.cookLabel);
+  });
+  $('#cookTimers').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-cook-stop]');
+    if (!btn) return;
+    cook.timers = cook.timers.filter((t) => t.id !== btn.dataset.cookStop);
+    renderCookTimers();
+  });
+  // Wischen: links = weiter, rechts = zurück
+  let touchX = null;
+  $('#cookBody').addEventListener('touchstart', (e) => { touchX = e.touches[0].clientX; }, { passive: true });
+  $('#cookBody').addEventListener('touchend', (e) => {
+    if (touchX == null) return;
+    const dx = e.changedTouches[0].clientX - touchX;
+    touchX = null;
+    if (Math.abs(dx) < 60) return;
+    if (dx < 0 && cook.step <= cook.recipe.schritte.length) $('#cookNext').click();
+    if (dx > 0 && cook.step > 0) $('#cookPrev').click();
+  }, { passive: true });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && $('#cookDialog').open) keepScreenOn(true);
+  });
+
+
   // Eingabe
   els.form.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -2839,6 +3221,7 @@ function init() {
   backend.startWissen(handleWissen);
   backend.startMap('kochbuch', handleKochbuch);
   backend.start(handleItems, setStatus);
+  handleSharedRecipe();
 }
 
 init();

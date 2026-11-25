@@ -309,6 +309,50 @@
     </form>
   </dialog>
 
+  <!-- Rezept aus Foto, Link oder Text -->
+  <dialog id="importDialog" class="sheet" aria-labelledby="importTitle">
+    <div class="sheet__inner">
+      <div class="sheet__handle" aria-hidden="true"></div>
+      <h2 id="importTitle" tabindex="-1" autofocus>Rezept ins Kochbuch holen</h2>
+      <p class="sheet__hint">Der Helfer liest das Rezept aus und legt es ins Kochbuch. Du kannst es danach jederzeit ansehen oder wieder entfernen.</p>
+      <label class="btn btn--primary btn--block import__photo">
+        📷 Rezept abfotografieren
+        <input type="file" accept="image/*" id="importPhoto" hidden>
+      </label>
+      <p class="field-label">oder Link einfügen (z. B. von Chefkoch)</p>
+      <form class="import__link" id="importLinkForm" autocomplete="off">
+        <input type="text" id="importLink" placeholder="https://…" aria-label="Link zum Rezept" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false">
+        <button type="submit" class="btn btn--ghost">Holen</button>
+      </form>
+      <p class="field-label">oder Rezepttext einfügen</p>
+      <form id="importTextForm" class="import__text" autocomplete="off">
+        <textarea id="importText" rows="4" maxlength="15000" placeholder="Zutaten und Zubereitung hier einfügen" aria-label="Rezepttext"></textarea>
+        <button type="submit" class="btn btn--ghost btn--block">Auswerten</button>
+      </form>
+      <p class="import__status" id="importStatus" role="status" hidden></p>
+      <div class="sheet__actions">
+        <button type="button" class="btn btn--ghost" id="importCancel">Schließen</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Kochmodus: Schritt für Schritt, Display bleibt an -->
+  <dialog id="cookDialog" class="viewer cook" aria-labelledby="cookTitle">
+    <div class="viewer__head">
+      <div class="viewer__titlerow">
+        <h2 id="cookTitle">Kochen</h2>
+        <button type="button" class="viewer__close" id="cookClose" aria-label="Kochmodus beenden">✕</button>
+      </div>
+      <div class="cook__progress" id="cookProgress" aria-hidden="true"></div>
+    </div>
+    <div class="viewer__body cook__body" id="cookBody"></div>
+    <div class="cook__timers" id="cookTimers" hidden></div>
+    <div class="cook__nav">
+      <button type="button" class="btn btn--ghost" id="cookPrev">◀ Zurück</button>
+      <button type="button" class="btn btn--primary" id="cookNext">Weiter ▶</button>
+    </div>
+  </dialog>
+
   <!-- Toast -->
   <div class="toast" id="toast" role="status" aria-live="polite" hidden>
     <span id="toastText"></span>

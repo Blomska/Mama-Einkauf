@@ -151,6 +151,122 @@ function validMessages(messages) {
   return clean;
 }
 
+/* ---------------- Rezept aus Foto, Link oder Text ---------------- */
+
+const IMPORT_SYSTEM = `Du liest Rezepte aus Fotos (z. B. Kochbuchseiten, Zeitschriften, handgeschriebene Rezeptkarten, Screenshots), Webseiten oder eingefügtem Text und schreibst sie sauber auf Deutsch für das Familien-Kochbuch.
+
+- Übernimm das Rezept so originalgetreu wie möglich: Zutaten mit Mengen, Portionen, Schritte. Nichts weglassen und keine Zutaten austauschen.
+- Übersetze fremdsprachige Rezepte ins Deutsche und rechne amerikanische Maße (cups, oz, °F) in g/ml/°C um.
+- "zutaten": "name" so, wie man es auf den Einkaufszettel schreibt, "menge" kurz (z. B. "400 g", "1 EL"), "laden": "egal", "im_angebot": false, "preis": "", "vorrat": true nur für Salz, Pfeffer, Öl, Mehl, Zucker, Gewürze, Brühe.
+- "schritte": klare, kurze Schritte in einfacher Sprache, höchstens 12. Zeiten mit Zahl und Einheit schreiben (z. B. "20 Minuten backen"), damit die App dafür einen Timer anbieten kann.
+- "portionen": wie im Rezept, sonst 4. "dauer_minuten": geschätzte Gesamtzeit. "emoji": ein passendes Essens-Emoji.
+- "kategorie": Hauptgerichte, Schnelle Gerichte (bis ca. 30 Min), Frühstück, Suppen & Eintöpfe, Salate & Beilagen oder Kuchen & Backen.
+- "hinweis": leer lassen, außer etwas Wichtiges war nicht lesbar (dann ein kurzer, freundlicher Satz dazu).
+- Ist kein Rezept zu erkennen, setze "gefunden": false und erkläre in "hinweis" kurz, warum (z. B. "Auf dem Foto ist kein Rezept zu erkennen.").`;
+
+const ImportSchema = z.object({
+  gefunden: z.boolean(),
+  hinweis: z.string(),
+  rezept: RecipeSchema
+});
+
+/** Seite laden und den Rezept-Teil herausholen (JSON-LD „Recipe" oder Text). */
+async function pageText(link) {
+  let url;
+  try {
+    url = new URL(link);
+  } catch {
+    return null;
+  }
+  if (!/^https?:$/.test(url.protocol)) return null;
+  const res = await fetch(url.toString(), {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',
+      'Accept-Language': 'de-DE,de;q=0.9'
+    },
+    redirect: 'follow',
+    signal: AbortSignal.timeout(9000)
+  });
+  if (!res.ok) return null;
+  const html = (await res.text()).slice(0, 1_500_000);
+  const decode = (t) => String(t || '').replace(/&quot;/g, '"').replace(/&#39;|&#x27;/g, "'").replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ');
+  const meta = (name) => decode(html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${name}["'][^>]+content=["']([^"']*)`, 'i'))?.[1]);
+
+  // 1. Strukturierte Rezeptdaten (Chefkoch, Lecker, viele Blogs)
+  for (const m of html.matchAll(/<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)) {
+    let data;
+    try { data = JSON.parse(m[1].trim()); } catch { continue; }
+    const nodes = [data].flat().flatMap((d) => (d && d['@graph'] ? d['@graph'] : [d]));
+    const recipe = nodes.find((n) => n && [n['@type']].flat().includes('Recipe'));
+    if (!recipe) continue;
+    const steps = [recipe.recipeInstructions].flat().filter(Boolean).flatMap((st) => {
+      if (typeof st === 'string') return [st];
+      if (st.itemListElement) return [st.itemListElement].flat().map((x) => x.text || x.name || '');
+      return [st.text || st.name || ''];
+    });
+    return [
+      `Titel: ${decode(recipe.name)}`,
+      recipe.recipeYield ? `Portionen: ${[recipe.recipeYield].flat().join(' ')}` : '',
+      recipe.totalTime ? `Zeit: ${recipe.totalTime}` : '',
+      recipe.description ? `Beschreibung: ${decode(recipe.description)}` : '',
+      `Zutaten:\n${[recipe.recipeIngredient].flat().filter(Boolean).map((z) => `- ${decode(z)}`).join('\n')}`,
+      `Zubereitung:\n${steps.map((st, i) => `${i + 1}. ${decode(st).replace(/<[^>]+>/g, ' ')}`).join('\n')}`
+    ].filter(Boolean).join('\n').slice(0, 15000);
+  }
+
+  // 2. Sonst: Titel, Beschreibung (bei Instagram steht dort der Beitragstext) und Seitentext
+  const body = decode(html
+    .replace(/<(script|style|noscript|svg|nav|footer|header)[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<br\s*\/?>|<\/(p|li|h\d|div)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' '))
+    .replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n').trim();
+  return [
+    `Titel: ${meta('og:title') || decode(html.match(/<title>([^<]*)/i)?.[1])}`,
+    `Beschreibung: ${meta('og:description') || meta('description')}`,
+    `Seitentext:\n${body.slice(0, 12000)}`
+  ].join('\n');
+}
+
+/** Rezept aus Foto, Link oder Text. */
+async function handleRezept(body, env, cors) {
+  const parts = [];
+  if (typeof body?.bild === 'string' && body.bild) {
+    const mime = /^image\/(jpeg|png|webp|heic|heif)$/.test(body.mime) ? body.mime : 'image/jpeg';
+    if (body.bild.length > 6_000_000) return json({ fehler: 'Das Foto ist zu groß.' }, 400, cors);
+    parts.push({ inlineData: { mimeType: mime, data: body.bild } });
+    parts.push({ text: 'Lies das Rezept auf diesem Foto aus.' });
+  } else if (typeof body?.link === 'string' && body.link) {
+    let text = null;
+    try {
+      text = await pageText(body.link.trim().slice(0, 2000));
+    } catch (err) {
+      console.warn('[Rezept] Seite nicht ladbar', err.message);
+    }
+    if (!text) {
+      return json({ fehler: 'Die Seite lässt sich nicht öffnen. Kopiere den Rezepttext und füge ihn unten ein, oder mach ein Bildschirmfoto.' }, 422, cors);
+    }
+    parts.push({ text: `Link: ${body.link}\n\n${text}` });
+  } else if (typeof body?.text === 'string' && body.text.trim()) {
+    parts.push({ text: body.text.trim().slice(0, 15000) });
+  } else {
+    return json({ fehler: 'Bitte ein Foto, einen Link oder Text schicken.' }, 400, cors);
+  }
+  const ai = createClient(env.GEMINI_API_KEY, 40000);
+  const out = await generateJson(ai, {
+    system: IMPORT_SYSTEM,
+    contents: [{ role: 'user', parts }],
+    schema: ImportSchema,
+    maxTokens: 6000,
+    model: env.GEMINI_MODEL || undefined,
+    retryDelayMs: 1500,
+    maxModels: 3
+  });
+  if (!out.gefunden || !out.rezept?.zutaten?.length) {
+    return json({ fehler: out.hinweis || 'Darin habe ich kein Rezept gefunden.' }, 422, cors);
+  }
+  return json({ rezept: out.rezept, hinweis: out.hinweis }, 200, cors);
+}
+
 /* ---------------- Worker ---------------- */
 
 export default {
@@ -172,7 +288,7 @@ export default {
     if (url.pathname === '/status') {
       return json({ ok: Boolean(env.GEMINI_API_KEY), familienCode: Boolean(env.FAMILY_CODE) }, 200, cors);
     }
-    if (url.pathname !== '/chat' || request.method !== 'POST') return json({ fehler: 'Nicht gefunden' }, 404, cors);
+    if (!['/chat', '/rezept'].includes(url.pathname) || request.method !== 'POST') return json({ fehler: 'Nicht gefunden' }, 404, cors);
     if (!originOk) return json({ fehler: 'Nicht erlaubt' }, 403, cors);
     if (env.FAMILY_CODE && request.headers.get('X-Familien-Code') !== env.FAMILY_CODE) {
       return json({ fehler: 'code', antwort: 'Der Familien-Code stimmt nicht.' }, 401, cors);
@@ -189,6 +305,17 @@ export default {
       body = await request.json();
     } catch {
       return json({ fehler: 'Ungültige Anfrage' }, 400, cors);
+    }
+    if (url.pathname === '/rezept') {
+      try {
+        return await handleRezept(body, env, cors);
+      } catch (err) {
+        console.error('[Rezept]', err);
+        if (err instanceof ApiError && err.status === 429) {
+          return json({ fehler: 'Gerade ist viel los – bitte in einer Minute nochmal versuchen.' }, 429, cors);
+        }
+        return json({ fehler: 'Konnte das Rezept gerade nicht auslesen. Bitte nochmal versuchen.' }, 503, cors);
+      }
     }
     const messages = validMessages(body?.messages);
     if (!messages) return json({ fehler: 'Ungültige Nachrichten' }, 400, cors);
