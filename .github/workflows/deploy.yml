@@ -43,7 +43,8 @@ jobs:
 
       - name: Prospekte & Angebote abrufen
         run: node scripts/update-prospekte.mjs
-        continue-on-error: true   # bei Ausfall: zuletzt gespeicherte Daten nutzen
+        continue-on-error: true
+        timeout-minutes: 15   # bei Ausfall: zuletzt gespeicherte Daten nutzen
 
       # Zwischenspeicher für KI-Ergebnisse: Gemini wird nur gefragt, wenn sich
       # Prospekt oder Angebote geändert haben (spart Kosten).
@@ -72,10 +73,9 @@ jobs:
           mkdir -p _site
           # Alle App-Dateien (*.js im Hauptordner) mitnehmen, damit neue Dateien nicht vergessen werden
           cp -r index.html style.css ./*.js manifest.json .nojekyll icons data _site/
-          # Sicherheitsnetz: Jede Datei, die die App lädt, muss im Paket sein – sonst bleibt die App bei „Verbinde …“ hängen
-          for f in $(grep -ohE "from '\./[^']+'" _site/*.js | sed -E "s/from '\.\/(.*)'/\1/" | sort -u); do
-            if [ ! -f "_site/$f" ]; then echo "::error::$f fehlt im Paket"; exit 1; fi
-          done
+          # Sicherheitsnetz: Ist etwas unvollständig oder kaputt, bricht es hier ab –
+          # dann bleibt die alte, funktionierende Version online.
+          node scripts/pruefen.mjs _site
 
       - name: Pages konfigurieren
         uses: actions/configure-pages@v5
@@ -97,3 +97,17 @@ jobs:
       - name: Veröffentlichen
         id: deployment
         uses: actions/deploy-pages@v4
+
+  # GitHub schaltet zeitgesteuerte Abläufe nach 60 Tagen ohne Code-Änderung ab.
+  # Dieser Schritt hält die täglichen Prospekt-Updates dauerhaft am Laufen.
+  wachhalten:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Zeitplan aktiv halten
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/deploy.yml/enable"
