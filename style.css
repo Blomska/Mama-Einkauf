@@ -1267,3 +1267,48 @@ h1, h2, h3, .btn, .chip, .tab { font-family: var(--font); }
   font-size: 15px; font-weight: 800; color: var(--text-soft); white-space: nowrap;
 }
 .kbchip.is-active { background: var(--primary); border-color: var(--primary); color: #fff; }
+
+/* ---------- Passt zu den Angeboten ---------- */
+.recipe__match { margin: 0; padding: 0 16px 8px; font-size: 16px; font-weight: 800; color: var(--primary-dark); }
+.kb__import { margin: 0 0 14px; }
+.empty-card .kb__import { margin: 12px 0 0; }
+
+/* ---------- Rezept aus Foto, Link oder Text ---------- */
+.import__photo { margin-bottom: 6px; min-height: 60px; font-size: 19px; }
+.import__link { display: flex; gap: 8px; }
+.import__link input, .import__text textarea {
+  flex: 1; min-width: 0; min-height: 52px; padding: 10px 12px;
+  border: 2px solid var(--line-strong); border-radius: 12px; font: inherit; font-size: 17px; background: #fff;
+}
+.import__text { display: grid; gap: 8px; }
+.import__text textarea { width: 100%; resize: vertical; }
+#importTitle:focus { outline: none; }
+.import__status { margin: 14px 0 0; padding: 12px 14px; border-radius: 12px; background: var(--primary-soft); color: var(--primary-dark); font-size: 17px; font-weight: 700; }
+.import__status.is-error { background: var(--danger-soft); color: var(--danger); }
+
+/* ---------- Kochmodus ---------- */
+.btn--cook { margin: 4px 0 8px; background: #FFF4D6; color: #8A5A00; border: 2px solid #F5D78E; font-size: 18px; }
+.btn--timer { background: var(--primary-soft); color: var(--primary-dark); border: 2px solid var(--primary); font-size: 19px; min-height: 56px; padding: 0 18px; }
+.cook__progress { display: flex; gap: 4px; margin-top: 10px; }
+.cook__progress span { flex: 1; height: 6px; border-radius: 99px; background: var(--line-strong); }
+.cook__progress span.is-done { background: var(--primary); }
+.cook__body { display: flex; flex-direction: column; gap: 20px; }
+.cook__count { margin: 0; font-size: 17px; font-weight: 800; color: var(--primary-dark); }
+.cook__step { margin: 0; font-size: 28px; line-height: 1.45; font-weight: 600; color: var(--text); }
+.cook__timerbtns { display: flex; flex-wrap: wrap; gap: 10px; }
+.cook__ingr { margin: 0; padding: 0; list-style: none; font-size: 21px; }
+.cook__ingr li { display: flex; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.cook__ingr li span:last-child { color: var(--text-soft); text-align: right; font-weight: 700; }
+.cook__done { text-align: center; font-size: 28px; font-weight: 800; margin: 40px 0 0; }
+.cook__timers { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 16px 0; background: var(--card); }
+.cook__timer {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 48px; padding: 0 16px;
+  border: 0; border-radius: 99px; background: var(--primary-soft); color: var(--primary-dark);
+  font: inherit; font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums;
+}
+.cook__timer small { font-size: 14px; font-weight: 600; }
+.cook__timer.is-ringing { background: var(--danger); color: #fff; animation: cookPulse 1s infinite; }
+@keyframes cookPulse { 50% { transform: scale(1.06); } }
+.cook__nav { display: flex; gap: 10px; padding: 12px 16px calc(14px + var(--safe-bottom)); border-top: 1px solid var(--line); background: var(--card); }
+.cook__nav .btn { flex: 1; min-height: 60px; font-size: 20px; }
+.cook__nav .btn:disabled { opacity: .4; }

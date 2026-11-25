@@ -15,6 +15,9 @@ Ohne Login, mit Echtzeit-Abgleich für die ganze Familie, installierbar als App 
 - **Automatische Angebots-Erkennung:** Steht z. B. Avocado im Aldi-Angebot, bekommen der Favorit „Avocados“ und der Listeneintrag automatisch ein 🏷️-Schild mit Preis.
 - **Spracheingabe (🎤)** und **Vorschläge beim Tippen**.
 - **Kochbuch (📖):** Rezepte aus den Wochenideen und vom Küchenhelfer mit „⭐ Ins Kochbuch“ dauerhaft speichern – gemeinsam für die Familie, mit automatischen Kategorien, ❤️ Lieblingsrezepten, Suche, Notizen und Portionen-Umrechnung. Eigene Rezepte erzählt man einfach dem Helfer.
+- **Kochmodus (👩‍🍳):** Rezept Schritt für Schritt in großer Schrift, Display bleibt an, Timer mit Ton direkt aus den Zeitangaben („20 Minuten backen“). Wischen oder Knöpfe zum Blättern.
+- **Rezept aus Foto oder Link (📷):** Kochbuchseite oder Zeitschrift abfotografieren, Link einfügen (z. B. Chefkoch) oder Text einfügen – der Helfer liest das Rezept aus und legt es ins Kochbuch. Auf Android geht das auch über „Teilen“ aus Chefkoch & Co. direkt in die App.
+- **„Im Angebot“ im Kochbuch (🏷️):** Zeigt Rezepte aus dem Kochbuch, für die gerade Zutaten bei Aldi oder Marktkauf im Angebot sind, die meisten Treffer zuerst.
 - **Familien-Gedächtnis (🧠):** Vorlieben wie „Milch immer 1,5 %“ oder „viel Hähnchen“ merkt sich die App. Startwissen steht in `wissen.js`, Neues lernt der Küchenhelfer im Chat („Soll ich mir das merken?“). Ersetzungen gelten sofort beim Eintragen („Milch“ → „Milch 1,5 %“). Helfer und Wochenrezepte berücksichtigen das Gedächtnis.
 - **Display anlassen** (Screen Wake Lock) und **WhatsApp-Teilen**.
 - **Offline-fähig:** Was im Funkloch abgehakt wird, gleicht sich später automatisch ab.
